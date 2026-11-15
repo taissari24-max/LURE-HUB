@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LURE Hub</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+    <div class="watermark">LURE</div>
+
+    <div class="room-container">
+        
+        <!-- ЭКРАН СОГЛАШЕНИЯ -->
+        <div id="agreement-view" class="modal-overlay" style="display: flex;">
+            <div class="modal-card">
+                <div class="modal-title">🌙 Добро пожаловать в LURE</div>
+                <div class="modal-subtitle">Правила и безопасность</div>
+                <div style="font-size: 11px; color: rgba(255,255,255,0.7); line-height: 1.4; text-align: left;">
+                    Используя LURE Hub, вы подтверждаете, что вам исполнилось 14 лет, и соглашаетесь с условиями <a href="https://telegra.ph/POLZOVATELSKOE-SOGLASHENIE-OFERTA--LURE-HUB-11-15" target="_blank" style="color: #b873e8;">Пользовательского соглашения</a>.
+                </div>
+                <button class="modal-action-btn" onclick="acceptAgreement()">Принять и войти ✨</button>
+            </div>
+        </div>
+
+        <!-- ЭКРАН БАНА -->
+        <div id="ban-screen-view" class="ban-view-content">
+            <div class="ban-card">
+                <div class="ban-icon">🚫</div>
+                <div class="ban-title">Доступ ограничен</div>
+                <div class="ban-reason">Ваш аккаунт заблокирован администратором.</div>
+                <div class="ban-timer-box">
+                    <div class="ban-timer-label">Осталось времени:</div>
+                    <div class="ban-timer-value">навсегда</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ГЛАВНОЕ МЕНЮ -->
+        <div id="menu-view" class="view-content active">
+            <div class="user-header">
+                <div class="user-info" onclick="switchMainTab('profile')">
+                    <div class="user-avatar-wrap">
+                        <div class="user-avatar" id="header-avatar-emoji">🦇</div>
+                        <div class="header-crown" id="header-crown-icon" style="display: none;">👑</div>
+                    </div>
+                    <div>
+                        <div class="user-name" id="header-user-name">Загрузка...</div>
+                        <div class="user-id" id="header-user-id">ID: #...</div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <!-- Кнопка режимы админа (видна только админам/владельцу) -->
+                    <button class="icon-btn" id="admin-panel-btn" onclick="openAdminModal()" style="display: none; background: rgba(255,50,80,0.15); border: 1px solid rgba(255,50,80,0.3);" title="Режим модерации">🛡️</button>
+                    
+                    <div class="icon-btn-wrap" onclick="openNotificationsModal()">
+                        <button class="icon-btn">🔔</button>
+                        <div class="notif-badge" id="notif-badge" style="display: none;">0</div>
+                    </div>
+                    <button class="icon-btn" onclick="switchMainTab('friends')">👥</button>
+                </div>
+            </div>
+
+            <button class="create-room-btn" onclick="openCreateModal()">
+                <span>➕</span> Создать свою комнату
+            </button>
+
+            <div class="section-title">Активные комнаты и эфиры</div>
+            <div class="rooms-list" id="rooms-list-container"></div>
+        </div>
+
+        <!-- ЭКРАН АУДИО-КОМНАТЫ -->
+        <div id="room-view" class="view-content">
+            <div class="room-top-bar">
+                <button class="back-btn" onclick="closeRoom()">← Назад</button>
+                <div class="room-header-title" id="active-room-title">🌙 Комната</div>
+                <div class="room-top-actions">
+                    <button class="action-icon-btn report-btn" onclick="reportRoom()">⚠️</button>
+                    <button class="online-badge clickable-badge" onclick="openMembersModal()">👥 1</button>
+                </div>
+            </div>
+
+            <div class="inner-tabs">
+                <button class="inner-tab active" onclick="switchRoomTab('player')">🎧 Эфир</button>
+                <button class="inner-tab" onclick="switchRoomTab('chat')">💬 Чат</button>
+            </div>
+
+            <div id="room-player-pane" class="pane-content active">
+                <div class="player-card">
+                    <div class="vinyl-disc" id="vinyl"></div>
+                    <div class="track-info">
+                        <div class="track-title" id="audio-title">Очередь пуста</div>
+                        <div class="track-artist" id="audio-artist">Добавьте трек ниже</div>
+                    </div>
+                    <div class="controls">
+                        <button class="control-btn" onclick="prevTrack()">⏮</button>
+                        <button class="control-btn play-btn" id="play-btn" onclick="togglePlay()">⏸</button>
+                        <button class="control-btn" onclick="nextTrack()">⏭</button>
+                    </div>
+                </div>
+
+                <div class="add-track-box">
+                    <input type="text" id="track-input" placeholder="YouTube ссылка..." onkeypress="handleTrackKeyPress(event)">
+                    <button onclick="addTrackToQueue()">+</button>
+                </div>
+
+                <div class="queue-section">
+                    <div class="queue-title">📜 Очередь воспроизведения</div>
+                    <div class="queue-list" id="queue-list-container">
+                        <div class="queue-item">Очередь пуста</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="room-chat-pane" class="pane-content">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-msg system">🌙 Эфир запущен. Общайтесь!</div>
+                </div>
+                <div class="chat-input-box">
+                    <input type="text" id="chat-input" placeholder="Сообщение в эфир..." onkeypress="handleKeyPress(event)">
+                    <button onclick="sendMessage()">➤</button>
+                </div>
+            </div>
+
+            <div id="host-close-room-container" style="width: 100%;"></div>
+        </div>
+
+        <!-- ЭКРАН ВИДЕО-КОМНАТЫ -->
+        <div id="video-room-view" class="view-content">
+            <div class="room-top-bar">
+                <button class="back-btn" onclick="closeRoom()">← Назад</button>
+                <div class="room-header-title" id="active-video-room-title">🎥 Киноклуб</div>
+                <div class="room-top-actions">
+                    <button class="action-icon-btn report-btn" onclick="reportRoom()">⚠️</button>
+                    <button class="online-badge clickable-badge" onclick="openMembersModal()">👥 1</button>
+                </div>
+            </div>
+
+            <div class="compact-video-card">
+                <div class="compact-video-screen">
+                    <div class="video-placeholder-art">🎬</div>
+                </div>
+                <div class="compact-video-controls">
+                    <button class="control-btn" onclick="prevVideo()">⏮ Назад</button>
+                    <button class="control-btn" onclick="nextVideo()">Вперед ⏭</button>
+                </div>
+                <div class="compact-video-info">
+                    <div class="track-title" id="video-room-title-text">Видео не выбрано</div>
+                    <div class="track-artist">Синхронный киноклуб</div>
+                </div>
+            </div>
+
+            <div class="add-track-box">
+                <input type="text" id="video-input" placeholder="YouTube ссылка на фильм/серию..." onkeypress="handleVideoTrackKeyPress(event)">
+                <button onclick="addVideoToQueue()">+</button>
+            </div>
+
+            <div class="queue-section">
+                <div class="queue-title">📜 Очередь просмотра</div>
+                <div class="queue-list" id="video-queue-list-container">
+                    <div class="queue-item">Очередь пуста</div>
+                </div>
+            </div>
+
+            <div class="video-chat-section">
+                <div class="chat-messages" id="video-chat-messages">
+                    <div class="chat-msg system">🎬 Кино-эфир запущен!</div>
+                </div>
+                <div class="chat-input-box">
+                    <input type="text" id="video-chat-input" placeholder="Написать в чат киноклуба..." onkeypress="handleVideoKeyPress(event)">
+                    <button onclick="sendVideoMessage()">➤</button>
+                </div>
+            </div>
+
+            <div id="video-host-close-container" style="width: 100%;"></div>
+        </div>
+
+        <!-- ЭКРАН ДРУЗЕЙ -->
+        <div id="friends-view" class="view-content">
+            <div class="screen-header">👥 Список друзей</div>
+            <div class="add-friend-box">
+                <input type="text" id="add-friend-input" placeholder="Введите ID друга (#lure_...)">
+                <button onclick="addFriendAction()">Добавить</button>
+            </div>
+            <div class="friends-list" id="friends-list-container">
+                <div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; padding: 10px;">Список друзей пуст</div>
+            </div>
+        </div>
+
+        <!-- ПРОФИЛЬ -->
+        <div id="profile-view" class="view-content">
+            <div class="screen-header">👤 Твой профиль</div>
+            <div class="profile-card">
+                <div class="profile-avatar-container">
+                    <div class="profile-crown" id="profile-crown-icon" style="display: none;">👑</div>
+                    <div class="avatar-container">
+                        <div class="big-avatar" id="profile-avatar-big">🦇</div>
+                    </div>
+                </div>
+
+                <div class="profile-field-title">Имя в системе</div>
+                <input type="text" class="profile-input" id="profile-name-input" value="" oninput="updateProfileName(this.value)">
+                
+                <div class="profile-field-title">Уникальный ID</div>
+                <div class="profile-field id-field" id="profile-id-text">#lure_777 📋</div>
+
+                <div class="profile-stats-grid">
+                    <div class="stat-box"><div class="stat-value">0 ч</div><div class="stat-label">В эфире</div></div>
+                    <div class="stat-box"><div class="stat-value">Сегодня</div><div class="stat-label">В LURE</div></div>
+                    <div class="stat-box"><div class="stat-value">0</div><div class="stat-label">Комнат</div></div>
+                </div>
+
+                <div class="premium-settings-box" id="premium-box">
+                    <div class="premium-title">👑 LURE Premium</div>
+                    <div class="premium-desc">Корона, цвет ника и безлимит.</div>
+                    <button class="buy-premium-btn" onclick="simulatePayment()">Оформить за 100 звёзд ✨</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- МОДАЛКА СОЗДАНИЯ КОМНАТЫ -->
+        <div id="create-modal" class="modal-overlay" style="display: none;" onclick="closeCreateModal(event)">
+            <div class="modal-card" onclick="event.stopPropagation()">
+                <div class="modal-title">✨ Создание комнаты</div>
+                <div class="form-group">
+                    <label>Название комнаты</label>
+                    <input type="text" id="new-room-name" class="modal-input" placeholder="Ночной чилл...">
+                </div>
+                <div class="form-group">
+                    <label>Тип контента</label>
+                    <select id="new-room-type" class="modal-input">
+                        <option value="audio">🎵 Аудио-радио</option>
+                        <option value="video">🎥 Киноклуб</option>
+                    </select>
+                </div>
+                <button class="modal-action-btn" onclick="submitCreateRoom()">Создать и войти 🚀</button>
+                <button class="modal-close-btn" onclick="closeCreateModalDirect()">Отмена</button>
+            </div>
+        </div>
+
+        <!-- МОДАЛКА МОДЕРАЦИИ (ДЛЯ АДМИНОВ) -->
+        <div id="admin-modal" class="modal-overlay" style="display: none;" onclick="closeAdminModal(event)">
+            <div class="modal-card" onclick="event.stopPropagation()">
+                <div class="modal-title">🛡️ Панель модератора</div>
+                <div class="modal-subtitle">Управление комнатами и чатом</div>
+                <button class="modal-action-btn" onclick="adminToggleChatMute()">🔇 Переключить мут общего чата</button>
+                <button class="modal-action-btn" onclick="adminClearRooms()" style="background: rgba(255,50,80,0.2); color: #ff8ea8;">🗑️ Очистить все комнаты</button>
+                <button class="modal-close-btn" onclick="closeAdminModalDirect()">Закрыть</button>
+            </div>
+        </div>
+
+        <!-- НИЖНЯЯ НАВИГАЦИЯ -->
+        <div class="nav-bar" id="main-nav">
+            <button class="nav-item active" id="nav-menu" onclick="switchMainTab('menu')">
+                <span>🏠</span> Главная
+            </button>
+            <button class="nav-item" id="nav-friends" onclick="switchMainTab('friends')">
+                <span>👥</span> Друзья
+            </button>
+            <button class="nav-item" id="nav-profile" onclick="switchMainTab('profile')">
+                <span>👤</span> Профиль
+            </button>
+        </div>
+    </div>
+
+    <script src="./script.js"></script>
+</body>
+</html>
