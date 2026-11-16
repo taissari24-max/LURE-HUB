@@ -34,9 +34,18 @@ let roomMembers = [];
 let roomMessages = [];
 let mediaQueue = [];
 let currentMediaIndex = 0;
-let lastRenderedVideoUrl = "";
 let isVideoPlaying = true;
 let videoCurrentTime = 0;
+
+// YouTube Iframe API переменные
+let ytPlayer = null;
+let isApiReady = false;
+let pendingVideoId = null;
+
+// Вызывается автоматически библиотекой YouTube API при загрузке
+window.onYouTubeIframeAPIReady = function() {
+    isApiReady = true;
+};
 
 window.addEventListener('DOMContentLoaded', () => {
     const tg = window.Telegram.WebApp;
@@ -99,6 +108,7 @@ window.addEventListener('DOMContentLoaded', () => {
     setInterval(syncAllData, 3000);
 });
 
+// Сохранение и загрузка профиля (включая вайб/статус)
 function loadUserProfileFromStorage() {
     const savedName = localStorage.getItem(`lure_name_${currentUserId}`);
     if (savedName) currentUserName = savedName;
@@ -110,6 +120,17 @@ function loadUserProfileFromStorage() {
 function saveUserProfileToStorage() {
     localStorage.setItem(`lure_name_${currentUserId}`, currentUserName);
     localStorage.setItem(`lure_status_${currentUserId}`, currentUserStatus);
+}
+
+function updateProfileName(newName) {
+    currentUserName = newName.trim() || 'Без имени';
+    saveUserProfileToStorage();
+    updateHeaderUI();
+}
+
+function updateProfileStatus(newStatus) {
+    currentUserStatus = newStatus.trim();
+    saveUserProfileToStorage();
 }
 
 function updateHeaderUI() {
@@ -396,7 +417,6 @@ async function openRoom(type, roomName, details, onlineCount = '1', hostName = c
     currentRoomHost = hostName;
     currentRoomType = type;
     currentActiveRoomId = roomId;
-    lastRenderedVideoUrl = "";
 
     document.getElementById('menu-view').classList.remove('active');
     document.getElementById('main-nav').style.display = 'none';
@@ -466,7 +486,7 @@ async function syncActiveRoomState() {
 
         if (currentRoomType === 'video') {
             renderVideoQueueList();
-            syncVideoPlayerDisplay(room);
+            syncVideoPlayerWithApi(room);
         } else {
             renderQueueList();
             updatePlayerDisplay();
@@ -523,6 +543,12 @@ async function closeRoomAsHost() {
 }
 
 async function closeRoom(skipRemoveMember = false) {
+    // Уничтожаем YouTube плеер при выходе
+    if (ytPlayer && typeof ytPlayer.destroy === 'function') {
+        try { ytPlayer.destroy(); } catch(e) {}
+        ytPlayer = null;
+    }
+
     if (currentActiveRoomId) {
         const isHost = (currentRoomHost === currentUserName);
         if (isHost || isModModeActive) {
@@ -533,7 +559,6 @@ async function closeRoom(skipRemoveMember = false) {
         }
     }
     currentActiveRoomId = null;
-    lastRenderedVideoUrl = "";
     document.getElementById('room-view').classList.remove('active');
     document.getElementById('video-room-view').classList.remove('active');
     document.getElementById('menu-view').classList.add('active');
@@ -609,7 +634,7 @@ async function kickMember(targetId) {
 function closeMembersModalDirect() { document.getElementById('members-modal').style.display = 'none'; }
 function closeMembersModal(event) { if (event.target.id === 'members-modal') document.getElementById('members-modal').style.display = 'none'; }
 
-// ================= ПЛЕЕР И СИНХРОНИЗАЦИЯ ВИДЕО С ХОСТОМ =================
+// ================= АУДИО ПЛЕЕР =================
 async function addTrackToQueue() {
     const input = document.getElementById('track-input');
     const val = input.value.trim();
@@ -654,6 +679,14 @@ function renderQueueList() {
     });
 }
 
+// ================= YOUTUBE IFRAME API (ИДЕАЛЬНАЯ СИНХРОНИЗАЦИЯ ВИДЕО) =================
+function extractYouTubeId(url) {
+    if (!url) return null;
+    let regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    let match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
+}
+
 async function addVideoToQueue() {
     const input = document.getElementById('video-input');
     const val = input.value.trim();
@@ -661,7 +694,7 @@ async function addVideoToQueue() {
 
     const updatedQueue = [...mediaQueue, { title: val }];
     input.value = '';
-    await updateRoomInSupabase(currentActiveRoomId, { media_queue: updatedQueue, video_time: 0, is_playing: true });
+    await updateRoomInSupabase(currentActiveRoomId, { media_queue: updatedQueue, current_index: mediaQueue.length, video_time: 0, is_playing: true });
     await syncActiveRoomState();
 }
 function handleVideoTrackKeyPress(event) { if (event.key === 'Enter') addVideoToQueue(); }
@@ -679,69 +712,109 @@ async function prevVideo() {
     }
 }
 
-function getYouTubeEmbedUrl(url, startSec = 0, playing = true) {
-    let regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-    let match = url.match(regExp);
-    if (match && match[2].length === 11) {
-        let startTime = Math.floor(startSec);
-        return `https://www.youtube.com/embed/${match[2]}?autoplay=${playing ? 1 : 0}&start=${startTime}`;
-    }
-    return null;
-}
-
 async function toggleVideoPlay() {
-    if (!currentActiveRoomId) return;
     const isHost = (currentRoomHost === currentUserName) || isModModeActive;
     if (!isHost) {
         alert("⚠️ Управлять воспроизведением может только хост комнаты!");
         return;
     }
-    const newPlayingState = !isVideoPlaying;
-    isVideoPlaying = newPlayingState;
-    await updateRoomInSupabase(currentActiveRoomId, { is_playing: newPlayingState, video_time: videoCurrentTime });
-    
-    const playBtn = document.getElementById('video-play-btn');
-    if (playBtn) playBtn.textContent = newPlayingState ? '⏸' : '▶';
+    if (!ytPlayer || typeof ytPlayer.getPlayerState !== 'function') return;
+
+    const state = ytPlayer.getPlayerState();
+    // 1 - Playing, 2 - Paused
+    let newPlaying = (state !== 1); 
+    let currentTime = 0;
+    try { currentTime = ytPlayer.getCurrentTime() || 0; } catch(e) {}
+
+    if (newPlaying) {
+        ytPlayer.playVideo();
+    } else {
+        ytPlayer.pauseVideo();
+    }
+
+    if (currentActiveRoomId) {
+        await updateRoomInSupabase(currentActiveRoomId, { is_playing: newPlaying, video_time: currentTime });
+    }
 }
 
-function syncVideoPlayerDisplay(room) {
-    if (mediaQueue.length === 0) return;
+function syncVideoPlayerWithApi(room) {
+    if (mediaQueue.length === 0) {
+        document.getElementById('video-room-title-text').textContent = "Видео не выбрано";
+        return;
+    }
+
     const video = mediaQueue[currentMediaIndex] || mediaQueue[0];
     document.getElementById('video-room-title-text').textContent = video.title;
 
-    const screenDiv = document.getElementById('video-screen-container');
-    if (!screenDiv) return;
-
+    const videoId = extractYouTubeId(video.title);
     const isHost = (currentRoomHost === currentUserName) || isModModeActive;
 
-    if (isHost) {
-        if (isVideoPlaying) {
-            videoCurrentTime += 3; // хост инкрементирует таймкод каждую сессию опроса
-        }
-        // Хост отправляет таймкод в базу
-        if (currentActiveRoomId) {
-            updateRoomInSupabase(currentActiveRoomId, { video_time: videoCurrentTime, is_playing: isVideoPlaying });
-        }
-    } else {
-        // Зритель синхронизирует таймкод и паузу с хостом из базы
-        videoCurrentTime = room.video_time || 0;
-        isVideoPlaying = room.is_playing !== false;
-    }
+    const statusText = isHost ? "Управляете вы (Хост)" : `Хост: ${currentRoomHost}`;
+    document.getElementById('video-control-status').textContent = statusText;
 
     const playBtn = document.getElementById('video-play-btn');
-    if (playBtn) playBtn.textContent = isVideoPlaying ? '⏸' : '▶';
+    if (playBtn) playBtn.textContent = room.is_playing ? '⏸' : '▶';
 
-    const embedUrl = getYouTubeEmbedUrl(video.title, videoCurrentTime, isVideoPlaying);
-    
-    // Перезагружаем плеер при смене видео или сильном расхождении таймкода / статуса
-    const cacheKey = `${video.title}_${Math.floor(videoCurrentTime / 6)}_${isVideoPlaying}`;
-    if (lastRenderedVideoUrl === cacheKey) return;
-    lastRenderedVideoUrl = cacheKey;
+    if (!videoId) {
+        document.getElementById('youtube-player-box').innerHTML = `<div style="font-size:11px; color:#b873e8; cursor:pointer; text-align:center; padding:20px;" onclick="window.open('${escapeHtml(video.title)}', '_blank')">▶ Открыть ссылку в браузере</div>`;
+        return;
+    }
 
-    if (embedUrl) {
-        screenDiv.innerHTML = `<iframe src="${embedUrl}" style="width:100%; height:100%; border:none; border-radius:10px;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
-    } else {
-        screenDiv.innerHTML = `<div class="video-placeholder-art">🎬</div><div style="font-size:11px; color:#b873e8; cursor:pointer;" onclick="window.open('${video.title}', '_blank')">▶ Открыть ссылку</div>`;
+    // Если API загрузился и плеер еще не создан — создаем
+    if (isApiReady) {
+        if (!ytPlayer) {
+            const container = document.getElementById('youtube-player-box');
+            container.innerHTML = '<div id="actual-yt-iframe"></div>';
+
+            ytPlayer = new YT.Player('actual-yt-iframe', {
+                height: '100%',
+                width: '100%',
+                videoId: videoId,
+                playerVars: { 'autoplay': 1, 'controls': isHost ? 1 : 0, 'modestbranding': 1 },
+                events: {
+                    'onReady': (event) => {
+                        if (!isHost) event.target.mute(); // зрителям мутим, чтобы не было эха
+                        event.target.seekTo(room.video_time || 0, true);
+                        if (room.is_playing) event.target.playVideo();
+                        else event.target.pauseVideo();
+                    }
+                }
+            });
+        } else {
+            // Плеер уже есть, проверяем смену видео или синхронизацию
+            try {
+                const currentUrl = ytPlayer.getVideoUrl ? ytPlayer.getVideoUrl() : '';
+                if (!currentUrl.includes(videoId)) {
+                    ytPlayer.loadVideoById({ videoId: videoId, startSeconds: room.video_time || 0 });
+                } else {
+                    // Синхронизация времени и паузы для зрителей
+                    if (!isHost) {
+                        const localTime = ytPlayer.getCurrentTime() || 0;
+                        const targetTime = room.video_time || 0;
+
+                        // Если рассинхрон больше 2 секунд — подтягиваем таймкод
+                        if (Math.abs(localTime - targetTime) > 2.0) {
+                            ytPlayer.seekTo(targetTime, true);
+                        }
+
+                        const state = ytPlayer.getPlayerState();
+                        if (room.is_playing && state !== 1) {
+                            ytPlayer.playVideo();
+                        } else if (!room.is_playing && state === 1) {
+                            ytPlayer.pauseVideo();
+                        }
+                    } else {
+                        // Если хост — каждые 3 секунды кидаем актуальный таймкод в базу
+                        const hostTime = ytPlayer.getCurrentTime() || 0;
+                        const state = ytPlayer.getPlayerState();
+                        const isPlayingNow = (state === 1 || state === 3);
+                        if (currentActiveRoomId) {
+                            updateRoomInSupabase(currentActiveRoomId, { video_time: hostTime, is_playing: isPlayingNow });
+                        }
+                    }
+                }
+            } catch(e) {}
+        }
     }
 }
 
@@ -1034,18 +1107,6 @@ function togglePlay() {
     const playBtn = document.getElementById('play-btn');
     vinyl.classList.toggle('paused');
     playBtn.textContent = vinyl.classList.contains('paused') ? '▶' : '⏸';
-}
-
-// Управление профилем
-function updateProfileName(newName) {
-    currentUserName = newName.trim() || 'Без имени';
-    saveUserProfileToStorage();
-    updateHeaderUI();
-}
-
-function updateProfileStatus(newStatus) {
-    currentUserStatus = newStatus.trim();
-    saveUserProfileToStorage();
 }
 
 function simulatePayment() {
