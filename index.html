@@ -6,6 +6,8 @@
     <title>LURE Hub</title>
     <!-- Официальная библиотека Telegram Mini App -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Официальный API плеера YouTube -->
+    <script src="https://www.youtube.com/iframe_api"></script>
     <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -148,9 +150,9 @@
             </div>
 
             <div class="compact-video-card">
-                <div class="compact-video-screen" id="video-screen-container">
-                    <div class="video-placeholder-art">🎬</div>
-                    <div class="play-overlay-icon" id="compact-video-play" onclick="toggleVideoPlay()">▶</div>
+                <!-- Контейнер для официального YouTube Iframe API плеера -->
+                <div class="compact-video-screen" id="youtube-player-box">
+                    <div class="video-placeholder-art" id="video-placeholder-art">🎬</div>
                 </div>
 
                 <div class="compact-video-controls">
@@ -161,7 +163,7 @@
 
                 <div class="compact-video-info">
                     <div class="track-title" id="video-room-title-text">Видео не выбрано</div>
-                    <div class="track-artist">YouTube плеер • Управляет хост</div>
+                    <div class="track-artist" id="video-control-status">YouTube плеер • Управляет хост</div>
                 </div>
             </div>
 
@@ -224,7 +226,7 @@
                 <div class="profile-field id-field" id="profile-id-text">#lure_777 📋</div>
                 
                 <div class="profile-field-title">Статус / Вайб</div>
-                <input type="text" class="profile-input" value="в поисках музыки под дождь 🌧️">
+                <input type="text" class="profile-input" id="profile-status-input" value="" oninput="updateProfileStatus(this.value)">
 
                 <div class="profile-stats-grid">
                     <div class="stat-box">
