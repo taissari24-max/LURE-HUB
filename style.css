@@ -260,6 +260,74 @@ body::after { right: 0; }
     background: rgba(255, 40, 80, 0.2); border: 1px solid #ff4d79; color: #ff8ea8; width: 100%; padding: 8px; border-radius: 10px; font-size: 11px; font-weight: 700; cursor: pointer;
 }
 
+/* Красивые строки участников в модалке (как раньше, с кнопками справа) */
+.modal-member-row {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    margin-bottom: 6px;
+}
+.modal-member-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 500;
+}
+.modal-member-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #3c124a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    background-size: cover;
+    background-position: center;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.modal-member-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+.modal-btn-action {
+    background: rgba(184, 115, 232, 0.15);
+    border: 1px solid rgba(184, 115, 232, 0.3);
+    color: #b873e8;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.modal-btn-kick {
+    background: rgba(255, 150, 50, 0.15);
+    border: 1px solid rgba(255, 150, 50, 0.3);
+    color: #ffb36b;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.modal-btn-ban {
+    background: rgba(255, 50, 80, 0.15);
+    border: 1px solid rgba(255, 50, 80, 0.3);
+    color: #ff8ea8;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
 .modal-overlay {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(6, 5, 10, 0.85); backdrop-filter: blur(6px);
     z-index: 10; display: flex; align-items: center; justify-content: center; padding: 16px;
