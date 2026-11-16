@@ -340,12 +340,10 @@ function renderRoomsList() {
 async function submitCreateRoom() {
     if (isBannedUser) return;
     
-    // Блокируем кнопку от спам-кликов и лагов
     const createBtn = document.querySelector('#create-modal .modal-action-btn');
     if (createBtn) createBtn.disabled = true;
 
     try {
-        // Сначала полностью удаляем любые старые комнаты этого хоста из базы, чтобы была ровно 1 комната
         await fetch(`${SUPABASE_URL}/rest/v1/rooms?host=eq.${encodeURIComponent(currentUserName)}`, {
             method: 'DELETE',
             headers: {
@@ -468,7 +466,7 @@ async function syncActiveRoomState() {
 
         if (currentRoomType === 'video') {
             renderVideoQueueList();
-            syncVideoPlayerDisplay();
+            syncVideoPlayerDisplay(room);
         } else {
             renderQueueList();
             updatePlayerDisplay();
@@ -528,10 +526,8 @@ async function closeRoom(skipRemoveMember = false) {
     if (currentActiveRoomId) {
         const isHost = (currentRoomHost === currentUserName);
         if (isHost || isModModeActive) {
-            // Если выходит хост — комната полностью удаляется из базы Supabase
             await deleteRoomFromSupabase(currentActiveRoomId);
         } else if (!skipRemoveMember) {
-            // Если обычный участник — просто удаляем себя из списка участников
             const updatedMembers = roomMembers.filter(m => Number(m.id) !== Number(currentUserId));
             await updateRoomInSupabase(currentActiveRoomId, { members: updatedMembers });
         }
@@ -545,7 +541,7 @@ async function closeRoom(skipRemoveMember = false) {
     fetchRoomsFromSupabase();
 }
 
-// ================= МОДАЛКА УЧАСТНИКОВ (КИК) =================
+// ================= КРАСИВАЯ МОДАЛКА УЧАСТНИКОВ (КИК + БАН) =================
 function openMembersModal() {
     const container = document.getElementById('members-list-container');
     if (!container) return;
@@ -555,28 +551,47 @@ function openMembersModal() {
     } else {
         container.innerHTML = '';
         const isHostOrAdmin = (currentRoomHost === currentUserName) || isAdmin(currentUserId);
+        const isUserAdminOrOwner = isAdmin(currentUserId);
 
         roomMembers.forEach(m => {
             const isMe = Number(m.id) === Number(currentUserId);
             const row = document.createElement('div');
-            row.className = 'modal-friend-row';
+            row.className = 'modal-member-row';
             
+            const avaStyle = m.avatar && m.avatar.startsWith('http') ? `background-image: url('${m.avatar}');` : '';
+            const avaText = m.avatar && m.avatar.startsWith('http') ? '' : (m.avatar || '👤');
+
             let buttonsHtml = '';
             if (!isMe) {
-                buttonsHtml += `<button class="modal-invite-action" style="margin-right:4px;" onclick="openUserProfileCard('${m.id}', '${escapeHtml(m.name)}'); closeMembersModalDirect();">Профиль</button>`;
+                buttonsHtml += `<button class="modal-btn-action" onclick="openUserProfileCard('${m.id}', '${escapeHtml(m.name)}'); closeMembersModalDirect();">Профиль</button>`;
+                
                 if (isHostOrAdmin && !isOwner(m.id)) {
-                    buttonsHtml += `<button class="modal-decline-action" style="width:auto; padding:3px 8px;" onclick="kickMember('${m.id}')">Кик</button>`;
+                    buttonsHtml += `<button class="modal-btn-kick" onclick="kickMember('${m.id}')">Кик</button>`;
+                }
+                
+                if (isUserAdminOrOwner && !isOwner(m.id)) {
+                    buttonsHtml += `<button class="modal-btn-ban" onclick="banMemberFromModal('${m.id}', '${escapeHtml(m.name)}')">Бан</button>`;
                 }
             }
 
             row.innerHTML = `
-                <span>👤 ${escapeHtml(m.name)} ${isMe ? '(Вы)' : ''}</span>
-                <div style="display:flex; align-items:center;">${buttonsHtml}</div>
+                <div class="modal-member-info">
+                    <div class="modal-member-avatar" style="${avaStyle}">${avaText}</div>
+                    <span>${escapeHtml(m.name)} ${isMe ? '(Вы)' : ''}</span>
+                </div>
+                <div class="modal-member-actions">${buttonsHtml}</div>
             `;
             container.appendChild(row);
         });
     }
     document.getElementById('members-modal').style.display = 'flex';
+}
+
+function banMemberFromModal(targetId, targetName) {
+    targetPunishUserId = targetId;
+    targetPunishUserName = targetName;
+    closeMembersModalDirect();
+    openPunishMenu('ban');
 }
 
 async function kickMember(targetId) {
@@ -594,7 +609,7 @@ async function kickMember(targetId) {
 function closeMembersModalDirect() { document.getElementById('members-modal').style.display = 'none'; }
 function closeMembersModal(event) { if (event.target.id === 'members-modal') document.getElementById('members-modal').style.display = 'none'; }
 
-// ================= СИНХРОННЫЙ ПЛЕЕР (СХОЖДЕНИЕ ТАЙМКОДА С ХОСТОМ) =================
+// ================= ПЛЕЕР И СИНХРОНИЗАЦИЯ ВИДЕО С ХОСТОМ =================
 async function addTrackToQueue() {
     const input = document.getElementById('track-input');
     const val = input.value.trim();
@@ -682,14 +697,14 @@ async function toggleVideoPlay() {
         return;
     }
     const newPlayingState = !isVideoPlaying;
-    await updateRoomInSupabase(currentActiveRoomId, { is_playing: newPlayingState });
     isVideoPlaying = newPlayingState;
+    await updateRoomInSupabase(currentActiveRoomId, { is_playing: newPlayingState, video_time: videoCurrentTime });
     
     const playBtn = document.getElementById('video-play-btn');
     if (playBtn) playBtn.textContent = newPlayingState ? '⏸' : '▶';
 }
 
-function syncVideoPlayerDisplay() {
+function syncVideoPlayerDisplay(room) {
     if (mediaQueue.length === 0) return;
     const video = mediaQueue[currentMediaIndex] || mediaQueue[0];
     document.getElementById('video-room-title-text').textContent = video.title;
@@ -699,13 +714,27 @@ function syncVideoPlayerDisplay() {
 
     const isHost = (currentRoomHost === currentUserName) || isModModeActive;
 
-    if (isHost && isVideoPlaying) {
-        videoCurrentTime += 3; // инкремент по таймеру polling (3 сек)
+    if (isHost) {
+        if (isVideoPlaying) {
+            videoCurrentTime += 3; // хост инкрементирует таймкод каждую сессию опроса
+        }
+        // Хост отправляет таймкод в базу
+        if (currentActiveRoomId) {
+            updateRoomInSupabase(currentActiveRoomId, { video_time: videoCurrentTime, is_playing: isVideoPlaying });
+        }
+    } else {
+        // Зритель синхронизирует таймкод и паузу с хостом из базы
+        videoCurrentTime = room.video_time || 0;
+        isVideoPlaying = room.is_playing !== false;
     }
+
+    const playBtn = document.getElementById('video-play-btn');
+    if (playBtn) playBtn.textContent = isVideoPlaying ? '⏸' : '▶';
 
     const embedUrl = getYouTubeEmbedUrl(video.title, videoCurrentTime, isVideoPlaying);
     
-    const cacheKey = `${video.title}_${Math.floor(videoCurrentTime / 10)}_${isVideoPlaying}`;
+    // Перезагружаем плеер при смене видео или сильном расхождении таймкода / статуса
+    const cacheKey = `${video.title}_${Math.floor(videoCurrentTime / 6)}_${isVideoPlaying}`;
     if (lastRenderedVideoUrl === cacheKey) return;
     lastRenderedVideoUrl = cacheKey;
 
@@ -729,7 +758,7 @@ function renderVideoQueueList() {
     });
 }
 
-// ================= ОТПРАВКА СООБЩЕНИЙ В ОБЩИЙ ЧАТ =================
+// ================= ОТПРАВКА СООБЩЕНИЙ В ЧАТ =================
 async function sendMessage() {
     if (isChatMuted || !currentActiveRoomId) return;
     const input = document.getElementById('chat-input');
@@ -776,7 +805,7 @@ async function sendVideoMessage() {
 }
 function handleVideoKeyPress(event) { if (event.key === 'Enter') sendVideoMessage(); }
 
-// ================= СИСТЕМА ДРУЗЕЙ, ПРОФИЛЬ И МОДЕРАЦИЯ =================
+// ================= СИСТЕМА ДРУЗЕЙ И МОДЕРАЦИЯ =================
 async function fetchRequestsFromSupabase() {
     try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?target_id=eq.${currentUserId}&select=*`, {
