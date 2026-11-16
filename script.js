@@ -13,6 +13,10 @@ let currentRoomName = "🌙 Комната";
 let currentRoomHost = "";
 let currentRoomType = "audio";
 let currentNicknameColor = "#b873e8";
+let currentUserAvatar = "🦇";
+let currentUserStatus = "в поисках музыки под дождь 🌧️";
+let sessionStartTime = Date.now();
+
 let isPremiumUser = false;
 let isBannedUser = false;  
 let isChatMuted = false;  
@@ -31,6 +35,8 @@ let roomMessages = [];
 let mediaQueue = [];
 let currentMediaIndex = 0;
 let lastRenderedVideoUrl = "";
+let isVideoPlaying = true;
+let videoCurrentTime = 0;
 
 window.addEventListener('DOMContentLoaded', () => {
     const tg = window.Telegram.WebApp;
@@ -43,6 +49,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     checkUserBanStatus();
+    loadUserProfileFromStorage();
 
     if (localStorage.getItem('lure_agreement_accepted') === 'true') {
         const agreementView = document.getElementById('agreement-view');
@@ -72,17 +79,67 @@ window.addEventListener('DOMContentLoaded', () => {
         if (modBtn) modBtn.style.display = 'flex';
     }
 
-    document.getElementById('header-user-name').textContent = currentUserName;
-    document.getElementById('header-user-id').textContent = `ID: #lure_${displayId}`;
+    updateHeaderUI();
     document.getElementById('profile-name-input').value = currentUserName;
+    document.getElementById('profile-status-input').value = currentUserStatus;
+    document.getElementById('profile-avatar-input').value = currentUserAvatar.startsWith('http') ? currentUserAvatar : '';
     document.getElementById('profile-id-text').textContent = `#lure_${displayId} 📋`;
 
     loadFriendsFromStorage();
     
-    // Polling каждые 3 секунды: обновляет список комнат, активную комнату и заявки
+    // Запуск таймера сессии в профиле
+    setInterval(updateSessionTimer, 60000);
+
+    // Polling каждые 3 секунды
     syncAllData();
     setInterval(syncAllData, 3000);
 });
+
+function loadUserProfileFromStorage() {
+    const savedName = localStorage.getItem(`lure_name_${currentUserId}`);
+    if (savedName) currentUserName = savedName;
+
+    const savedAva = localStorage.getItem(`lure_avatar_${currentUserId}`);
+    if (savedAva) currentUserAvatar = savedAva;
+
+    const savedStatus = localStorage.getItem(`lure_status_${currentUserId}`);
+    if (savedStatus) currentUserStatus = savedStatus;
+}
+
+function saveUserProfileToStorage() {
+    localStorage.setItem(`lure_name_${currentUserId}`, currentUserName);
+    localStorage.setItem(`lure_avatar_${currentUserId}`, currentUserAvatar);
+    localStorage.setItem(`lure_status_${currentUserId}`, currentUserStatus);
+}
+
+function updateHeaderUI() {
+    document.getElementById('header-user-name').textContent = currentUserName;
+    const isUserOwner = isOwner(currentUserId);
+    let displayId = isUserOwner ? "1" : currentUserId;
+    document.getElementById('header-user-id').textContent = `ID: #lure_${displayId}`;
+
+    const headerAva = document.getElementById('header-avatar-emoji');
+    const profileAva = document.getElementById('profile-avatar-big');
+
+    if (currentUserAvatar.startsWith('http')) {
+        headerAva.style.backgroundImage = `url('${currentUserAvatar}')`;
+        headerAva.textContent = '';
+        profileAva.style.backgroundImage = `url('${currentUserAvatar}')`;
+        profileAva.textContent = '';
+    } else {
+        headerAva.style.backgroundImage = 'none';
+        headerAva.textContent = currentUserAvatar;
+        profileAva.style.backgroundImage = 'none';
+        profileAva.textContent = currentUserAvatar;
+    }
+}
+
+function updateSessionTimer() {
+    const minutes = Math.floor((Date.now() - sessionStartTime) / 60000);
+    const hours = (minutes / 60).toFixed(1);
+    const statValEl = document.querySelector('.stat-value');
+    if (statValEl) statValEl.textContent = `${hours} ч`;
+}
 
 async function syncAllData() {
     await fetchRoomsFromSupabase();
@@ -172,10 +229,9 @@ async function fetchRoomsFromSupabase() {
         if (!res.ok) return;
         const data = await res.json();
         const now = Date.now();
-        // Комнаты без людей удаляются через 5 минут (300000 мс)
         activeRooms = data.filter(room => {
             const membersCount = Array.isArray(room.members) ? room.members.length : 0;
-            if (membersCount > 0) return true; // Если есть люди — комната живет
+            if (membersCount > 0) return true;
             return (now - Number(room.created_at)) < 300000;
         });
         renderRoomsList();
@@ -278,7 +334,7 @@ async function submitCreateRoom() {
     
     const hasMyRoom = activeRooms.some(r => r.host === currentUserName);
     if (hasMyRoom && !isModModeActive) {
-        alert("⚠️ У вас уже есть активная комната! Вы можете зайти в неё или сначала закрыть её.");
+        alert("⚠️ У вас уже есть активная комната!");
         document.getElementById('create-modal').style.display = 'none';
         return;
     }
@@ -292,7 +348,7 @@ async function submitCreateRoom() {
     const isPrivate = privacySelect.value === 'private';
     const detailsText = roomType === 'video' ? 'Совместный просмотр' : 'Музыкальный эфир';
 
-    const initialMembers = isModModeActive ? [] : [{ id: currentUserId, name: currentUserName }];
+    const initialMembers = isModModeActive ? [] : [{ id: currentUserId, name: currentUserName, avatar: currentUserAvatar, status: currentUserStatus }];
 
     const newRoomObj = {
         id: Date.now(),
@@ -305,7 +361,9 @@ async function submitCreateRoom() {
         members: initialMembers,
         messages: [],
         media_queue: [],
-        current_index: 0
+        current_index: 0,
+        is_playing: true,
+        video_time: 0
     };
 
     const saved = await saveRoomToSupabase(newRoomObj);
@@ -337,7 +395,6 @@ async function openRoom(type, roomName, details, onlineCount = '1', hostName = c
         document.getElementById('room-view').classList.add('active');
     }
 
-    // Регистрируем вход участника в Supabase (если не в режиме невидимки)
     if (roomId) {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/rooms?id=eq.${roomId}&select=*`, {
             headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
@@ -347,7 +404,7 @@ async function openRoom(type, roomName, details, onlineCount = '1', hostName = c
             if (rooms.length > 0) {
                 let members = Array.isArray(rooms[0].members) ? rooms[0].members : [];
                 if (!isModModeActive && !members.some(m => Number(m.id) === Number(currentUserId))) {
-                    members.push({ id: currentUserId, name: currentUserName });
+                    members.push({ id: currentUserId, name: currentUserName, avatar: currentUserAvatar, status: currentUserStatus });
                     await updateRoomInSupabase(roomId, { members: members });
                 }
             }
@@ -356,7 +413,7 @@ async function openRoom(type, roomName, details, onlineCount = '1', hostName = c
     }
 }
 
-// СИНХРОНИЗАЦИЯ ЧАТА, УЧАСТНИКОВ И ПЛЕЕРА ВНУТРИ КОМНАТЫ
+// СИНХРОНИЗАЦИЯ СОСТОЯНИЯ КОМНАТЫ
 async function syncActiveRoomState() {
     if (!currentActiveRoomId) return;
     try {
@@ -376,23 +433,21 @@ async function syncActiveRoomState() {
         roomMessages = Array.isArray(room.messages) ? room.messages : [];
         mediaQueue = Array.isArray(room.media_queue) ? room.media_queue : [];
         currentMediaIndex = room.current_index || 0;
+        isVideoPlaying = room.is_playing !== false;
+        videoCurrentTime = room.video_time || 0;
 
-        // Если тебя выгнали из списка участников
         if (!isModModeActive && !roomMembers.some(m => Number(m.id) === Number(currentUserId))) {
             alert("👢 Вы были исключены из комнаты.");
             closeRoom(true);
             return;
         }
 
-        // Обновляем счетчик участников сверху справа
         const badgeSelector = currentRoomType === 'video' ? '#video-room-view .online-badge' : '#room-view .online-badge';
         const badgeEl = document.querySelector(badgeSelector);
         if (badgeEl) badgeEl.textContent = `👥 ${roomMembers.length}`;
 
-        // Рендерим общий чат
         renderSyncedChat();
 
-        // Рендерим общий плеер/очередь
         if (currentRoomType === 'video') {
             renderVideoQueueList();
             syncVideoPlayerDisplay();
@@ -453,7 +508,6 @@ async function closeRoomAsHost() {
 
 async function closeRoom(skipRemoveMember = false) {
     if (currentActiveRoomId && !skipRemoveMember && !isModModeActive) {
-        // Удаляем себя из списка участников при выходе
         const updatedMembers = roomMembers.filter(m => Number(m.id) !== Number(currentUserId));
         await updateRoomInSupabase(currentActiveRoomId, { members: updatedMembers, created_at: Date.now() });
     }
@@ -466,13 +520,13 @@ async function closeRoom(skipRemoveMember = false) {
     fetchRoomsFromSupabase();
 }
 
-// ================= МОДАЛКА УЧАСТНИКОВ (КИК И ЖАЛОБА) =================
+// ================= МОДАЛКА УЧАСТНИКОВ (КИК) =================
 function openMembersModal() {
     const container = document.getElementById('members-list-container');
     if (!container) return;
 
     if (roomMembers.length === 0) {
-        container.innerHTML = `<div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center;">В комнате никого нет (или вы в невидимке)</div>`;
+        container.innerHTML = `<div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center;">В комнате никого нет</div>`;
     } else {
         container.innerHTML = '';
         const isHostOrAdmin = (currentRoomHost === currentUserName) || isAdmin(currentUserId);
@@ -515,7 +569,7 @@ async function kickMember(targetId) {
 function closeMembersModalDirect() { document.getElementById('members-modal').style.display = 'none'; }
 function closeMembersModal(event) { if (event.target.id === 'members-modal') document.getElementById('members-modal').style.display = 'none'; }
 
-// ================= СИНХРОННЫЙ ПЛЕЕР И ОЧЕРЕДЬ =================
+// ================= СИНХРОННЫЙ ПЛЕЕР (СХОЖДЕНИЕ ТАЙМКОДА С ХОСТОМ) =================
 async function addTrackToQueue() {
     const input = document.getElementById('track-input');
     const val = input.value.trim();
@@ -567,28 +621,47 @@ async function addVideoToQueue() {
 
     const updatedQueue = [...mediaQueue, { title: val }];
     input.value = '';
-    await updateRoomInSupabase(currentActiveRoomId, { media_queue: updatedQueue });
+    await updateRoomInSupabase(currentActiveRoomId, { media_queue: updatedQueue, video_time: 0, is_playing: true });
     await syncActiveRoomState();
 }
 function handleVideoTrackKeyPress(event) { if (event.key === 'Enter') addVideoToQueue(); }
 
 async function nextVideo() {
     if (currentMediaIndex < mediaQueue.length - 1 && currentActiveRoomId) {
-        await updateRoomInSupabase(currentActiveRoomId, { current_index: currentMediaIndex + 1 });
+        await updateRoomInSupabase(currentActiveRoomId, { current_index: currentMediaIndex + 1, video_time: 0, is_playing: true });
         await syncActiveRoomState();
     }
 }
 async function prevVideo() {
     if (currentMediaIndex > 0 && currentActiveRoomId) {
-        await updateRoomInSupabase(currentActiveRoomId, { current_index: currentMediaIndex - 1 });
+        await updateRoomInSupabase(currentActiveRoomId, { current_index: currentMediaIndex - 1, video_time: 0, is_playing: true });
         await syncActiveRoomState();
     }
 }
 
-function getYouTubeEmbedUrl(url) {
+function getYouTubeEmbedUrl(url, startSec = 0, playing = true) {
     let regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
     let match = url.match(regExp);
-    return (match && match[2].length === 11) ? `https://www.youtube.com/embed/${match[2]}?autoplay=1` : null;
+    if (match && match[2].length === 11) {
+        let startTime = Math.floor(startSec);
+        return `https://www.youtube.com/embed/${match[2]}?autoplay=${playing ? 1 : 0}&start=${startTime}`;
+    }
+    return null;
+}
+
+async function toggleVideoPlay() {
+    if (!currentActiveRoomId) return;
+    const isHost = (currentRoomHost === currentUserName) || isModModeActive;
+    if (!isHost) {
+        alert("⚠️ Управлять воспроизведением может только хост комнаты!");
+        return;
+    }
+    const newPlayingState = !isVideoPlaying;
+    await updateRoomInSupabase(currentActiveRoomId, { is_playing: newPlayingState });
+    isVideoPlaying = newPlayingState;
+    
+    const playBtn = document.getElementById('video-play-btn');
+    if (playBtn) playBtn.textContent = newPlayingState ? '⏸' : '▶';
 }
 
 function syncVideoPlayerDisplay() {
@@ -596,14 +669,23 @@ function syncVideoPlayerDisplay() {
     const video = mediaQueue[currentMediaIndex] || mediaQueue[0];
     document.getElementById('video-room-title-text').textContent = video.title;
 
-    // Не перезагружаем iframe каждые 3 секунды, если видео то же самое
-    if (lastRenderedVideoUrl === video.title) return;
-    lastRenderedVideoUrl = video.title;
-
     const screenDiv = document.getElementById('video-screen-container');
     if (!screenDiv) return;
 
-    const embedUrl = getYouTubeEmbedUrl(video.title);
+    const isHost = (currentRoomHost === currentUserName) || isModModeActive;
+
+    // Если хост — считаем секунды и обновляем в базе таймкод каждые 10 секунд
+    if (isHost && isVideoPlaying) {
+        videoCurrentTime += 3; // по частоте polling (3 секунды)
+    }
+
+    const embedUrl = getYouTubeEmbedUrl(video.title, videoCurrentTime, isVideoPlaying);
+    
+    // Перезагружаем плеер только при смене видео или существенном изменении таймкода / статуса паузы
+    const cacheKey = `${video.title}_${Math.floor(videoCurrentTime / 10)}_${isVideoPlaying}`;
+    if (lastRenderedVideoUrl === cacheKey) return;
+    lastRenderedVideoUrl = cacheKey;
+
     if (embedUrl) {
         screenDiv.innerHTML = `<iframe src="${embedUrl}" style="width:100%; height:100%; border:none; border-radius:10px;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
     } else {
@@ -824,6 +906,31 @@ async function reportRoom() {
     } catch (e) { alert("Ошибка при отправке жалобы."); }
 }
 
+async function reportUserProfile() {
+    const reason = prompt("⚠️ Укажите причину жалобы на этого пользователя:");
+    if (!reason) return;
+    try {
+        await fetch(`${SUPABASE_URL}/rest/v1/reports`, {
+            method: 'POST',
+            headers: {
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            },
+            body: JSON.stringify({
+                room_name: "Профиль пользователя",
+                host_name: targetPunishUserName,
+                reporter_id: currentUserId,
+                reporter_name: currentUserName,
+                reason: `Жалоба на пользователя: ${reason}`,
+                created_at: Date.now()
+            })
+        });
+        alert("📨 Жалоба на профиль отправлена администрации!");
+    } catch (e) { alert("Ошибка при отправке жалобы."); }
+}
+
 function openPunishMenu(type) {
     if (isOwner(targetPunishUserId)) { alert("⛔ Владелец неприкосновенен!"); return; }
     document.getElementById('punish-modal-title').textContent = type === 'mute' ? `Мут для ${targetPunishUserName}` : `Бан для ${targetPunishUserName}`;
@@ -877,17 +984,22 @@ function togglePlay() {
     playBtn.textContent = vinyl.classList.contains('paused') ? '▶' : '⏸';
 }
 
-function toggleVideoPlay() {
-    const icon = document.getElementById('compact-video-play');
-    const playBtn = document.getElementById('video-play-btn');
-    const isPaused = icon.textContent === '▶';
-    icon.textContent = isPaused ? '⏸' : '▶';
-    playBtn.textContent = isPaused ? '⏸' : '▶';
-}
-
+// Управление профилем (имя, статус, аватарка)
 function updateProfileName(newName) {
     currentUserName = newName.trim() || 'Без имени';
-    document.getElementById('header-user-name').textContent = currentUserName;
+    saveUserProfileToStorage();
+    updateHeaderUI();
+}
+
+function updateProfileStatus(newStatus) {
+    currentUserStatus = newStatus.trim();
+    saveUserProfileToStorage();
+}
+
+function updateProfileAvatar(newAvatar) {
+    currentUserAvatar = newAvatar.trim() || '🦇';
+    saveUserProfileToStorage();
+    updateHeaderUI();
 }
 
 function simulatePayment() {
@@ -909,6 +1021,15 @@ function openUserProfileCard(userId, userName) {
     targetPunishUserName = userName;
     document.getElementById('other-user-name').textContent = userName;
     document.getElementById('other-user-id').textContent = `#lure_${userId} 📋`;
+    document.getElementById('other-user-status').textContent = "в сети • вайб в гармонии";
+
+    const isUserOwner = isOwner(userId);
+    const otherCrown = document.getElementById('other-user-crown');
+    if (isUserOwner) {
+        otherCrown.style.display = 'block';
+    } else {
+        otherCrown.style.display = 'none';
+    }
     
     const punishBox = document.getElementById('admin-punish-container');
     if (isAdmin(currentUserId) && !isOwner(userId)) {
