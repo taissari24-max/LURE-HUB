@@ -93,7 +93,7 @@ body::after { right: 0; }
 }
 .friend-card {
     background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 14px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+    border-radius: 14px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; margin-bottom: 8px; cursor: pointer;
 }
 
 .room-badge {
@@ -259,8 +259,64 @@ body::after { right: 0; }
 .ban-profile-btn {
     background: rgba(255, 40, 80, 0.2); border: 1px solid #ff4d79; color: #ff8ea8; width: 100%; padding: 8px; border-radius: 10px; font-size: 11px; font-weight: 700; cursor: pointer;
 }
+.report-profile-btn {
+    background: rgba(255, 100, 50, 0.15); border: 1px solid rgba(255, 100, 50, 0.4); color: #ffb38e; width: 100%; padding: 8px; border-radius: 10px; font-size: 11px; font-weight: 700; cursor: pointer; margin-top: 4px;
+}
 
-/* Красивые строки участников в модалке (как раньше, с кнопками справа) */
+/* Красивые карточки уведомлений */
+.notification-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 6px;
+    text-align: left;
+}
+.notification-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.notification-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #ffd700;
+}
+.notification-sub {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.7);
+}
+.notification-actions {
+    display: flex;
+    gap: 6px;
+}
+.notif-btn-accept {
+    flex: 1;
+    background: linear-gradient(135deg, #6a1b4d, #3c124a);
+    border: none;
+    color: #fff;
+    padding: 6px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.notif-btn-decline {
+    background: rgba(255, 50, 80, 0.2);
+    border: 1px solid rgba(255, 50, 80, 0.4);
+    color: #ff8ea8;
+    width: 32px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* Красивые строки участников в модалке */
 .modal-member-row {
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.05);
