@@ -40,9 +40,7 @@ let videoCurrentTime = 0;
 // YouTube Iframe API переменные
 let ytPlayer = null;
 let isApiReady = false;
-let pendingVideoId = null;
 
-// Вызывается автоматически библиотекой YouTube API при загрузке
 window.onYouTubeIframeAPIReady = function() {
     isApiReady = true;
 };
@@ -55,7 +53,6 @@ window.addEventListener('DOMContentLoaded', () => {
             currentUserName = tg.initDataUnsafe.user.first_name || "Пользователь";
             currentUserId = tg.initDataUnsafe.user.id;
             
-            // Автоматически берем аватарку из Telegram
             if (tg.initDataUnsafe.user.photo_url) {
                 currentUserAvatar = tg.initDataUnsafe.user.photo_url;
             }
@@ -100,15 +97,12 @@ window.addEventListener('DOMContentLoaded', () => {
 
     loadFriendsFromStorage();
     
-    // Запуск таймера сессии в профиле
     setInterval(updateSessionTimer, 60000);
 
-    // Polling каждые 3 секунды
     syncAllData();
     setInterval(syncAllData, 3000);
 });
 
-// Сохранение и загрузка профиля (включая вайб/статус)
 function loadUserProfileFromStorage() {
     const savedName = localStorage.getItem(`lure_name_${currentUserId}`);
     if (savedName) currentUserName = savedName;
@@ -173,6 +167,7 @@ function updateSessionTimer() {
 async function syncAllData() {
     await fetchRoomsFromSupabase();
     await fetchRequestsFromSupabase();
+    await fetchFriendsFromSupabase();
     if (currentActiveRoomId) {
         await syncActiveRoomState();
     }
@@ -449,7 +444,6 @@ async function openRoom(type, roomName, details, onlineCount = '1', hostName = c
     }
 }
 
-// СИНХРОНИЗАЦИЯ СОСТОЯНИЯ КОМНАТЫ
 async function syncActiveRoomState() {
     if (!currentActiveRoomId) return;
     try {
@@ -543,7 +537,6 @@ async function closeRoomAsHost() {
 }
 
 async function closeRoom(skipRemoveMember = false) {
-    // Уничтожаем YouTube плеер при выходе
     if (ytPlayer && typeof ytPlayer.destroy === 'function') {
         try { ytPlayer.destroy(); } catch(e) {}
         ytPlayer = null;
@@ -566,7 +559,7 @@ async function closeRoom(skipRemoveMember = false) {
     fetchRoomsFromSupabase();
 }
 
-// ================= КРАСИВАЯ МОДАЛКА УЧАСТНИКОВ (КИК + БАН) =================
+// ================= МОДАЛКА УЧАСТНИКОВ (КИК + ПЕРЕХОД В ПРОФИЛЬ) =================
 function openMembersModal() {
     const container = document.getElementById('members-list-container');
     if (!container) return;
@@ -587,13 +580,13 @@ function openMembersModal() {
             const avaText = m.avatar && m.avatar.startsWith('http') ? '' : (m.avatar || '👤');
 
             let buttonsHtml = '';
+            // Кнопка профиля теперь работает всегда для всех участников
+            buttonsHtml += `<button class="modal-btn-action" onclick="openUserProfileCard('${m.id}', '${escapeHtml(m.name)}'); closeMembersModalDirect();">Профиль</button>`;
+            
             if (!isMe) {
-                buttonsHtml += `<button class="modal-btn-action" onclick="openUserProfileCard('${m.id}', '${escapeHtml(m.name)}'); closeMembersModalDirect();">Профиль</button>`;
-                
                 if (isHostOrAdmin && !isOwner(m.id)) {
                     buttonsHtml += `<button class="modal-btn-kick" onclick="kickMember('${m.id}')">Кик</button>`;
                 }
-                
                 if (isUserAdminOrOwner && !isOwner(m.id)) {
                     buttonsHtml += `<button class="modal-btn-ban" onclick="banMemberFromModal('${m.id}', '${escapeHtml(m.name)}')">Бан</button>`;
                 }
@@ -634,7 +627,174 @@ async function kickMember(targetId) {
 function closeMembersModalDirect() { document.getElementById('members-modal').style.display = 'none'; }
 function closeMembersModal(event) { if (event.target.id === 'members-modal') document.getElementById('members-modal').style.display = 'none'; }
 
-// ================= АУДИО ПЛЕЕР =================
+// ================= СИСТЕМА ДРУЗЕЙ И УВЕДОМЛЕНИЙ (СИММЕТРИЧНЫЕ ДРУЗЬЯ) =================
+async function fetchRequestsFromSupabase() {
+    try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?target_id=eq.${currentUserId}&select=*`, {
+            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
+        });
+        if (res.ok) {
+            pendingFriendRequests = await res.json();
+            updateNotifBadge();
+        }
+    } catch (e) {}
+}
+
+async function fetchFriendsFromSupabase() {
+    try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/friends?or=(user_id.eq.${currentUserId},friend_id.eq.${currentUserId})&select=*`, {
+            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
+        });
+        if (res.ok) {
+            const data = await res.json();
+            friendsList = data.map(f => {
+                const isMeUser = Number(f.user_id) === Number(currentUserId);
+                return {
+                    id: isMeUser ? f.friend_id : f.user_id,
+                    name: isMeUser ? f.friend_name : f.user_name
+                };
+            });
+            renderFriendsList();
+        }
+    } catch(e) {}
+}
+
+async function addFriendAction() {
+    const input = document.getElementById('add-friend-input');
+    const val = input.value.trim().replace('#lure_', '');
+    let targetDigitalId = Number(val);
+    if (val === "1") targetDigitalId = Number(OWNER_ID);
+
+    if (!targetDigitalId || isNaN(targetDigitalId)) { alert("⚠️ Введите корректный ID друга!"); return; }
+    if (targetDigitalId === Number(currentUserId)) { alert("⛔ Нельзя добавить себя!"); return; }
+
+    try {
+        await fetch(`${SUPABASE_URL}/rest/v1/friend_requests`, {
+            method: 'POST',
+            headers: {
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            },
+            body: JSON.stringify({ sender_id: currentUserId, sender_name: currentUserName, target_id: targetDigitalId })
+        });
+        alert("📨 Заявка в друзья отправлена!");
+        input.value = '';
+    } catch (e) { alert("Ошибка отправки."); }
+}
+
+function updateNotifBadge() {
+    const count = pendingFriendRequests.length;
+    const badge = document.getElementById('notif-badge');
+    if (badge) {
+        badge.textContent = count;
+        badge.style.display = count > 0 ? 'block' : 'none';
+    }
+}
+
+function openNotificationsModal() {
+    const container = document.getElementById('notifications-list-container');
+    const sub = document.getElementById('notif-modal-text');
+    if (pendingFriendRequests.length === 0) {
+        sub.textContent = "Нет новых заявок";
+        container.innerHTML = `<div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; padding: 10px;">📭 Пусто</div>`;
+    } else {
+        sub.textContent = "Входящие заявки:";
+        container.innerHTML = '';
+        pendingFriendRequests.forEach(req => {
+            const card = document.createElement('div');
+            card.className = 'notification-card';
+            card.innerHTML = `
+                <div class="notification-header">
+                    <span class="notification-title">👥 Заявка в друзья</span>
+                </div>
+                <div class="notification-sub">${escapeHtml(req.sender_name)} хочет дружить (#lure_${req.sender_id === Number(OWNER_ID) ? 1 : req.sender_id})</div>
+                <div class="notification-actions">
+                    <button class="notif-btn-accept" onclick="acceptFriend(${req.sender_id}, '${escapeHtml(req.sender_name)}', ${req.id})">Принять</button>
+                    <button class="notif-btn-decline" onclick="declineFriend(${req.id})">✕</button>
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    }
+    document.getElementById('notifications-modal').style.display = 'flex';
+}
+
+async function acceptFriend(senderId, senderName, reqId) {
+    // Записываем дружбу в обе стороны в Supabase таблицу friends
+    try {
+        await fetch(`${SUPABASE_URL}/rest/v1/friends`, {
+            method: 'POST',
+            headers: {
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            },
+            body: JSON.stringify({
+                user_id: currentUserId,
+                friend_id: senderId,
+                friend_name: senderName,
+                user_name: currentUserName
+            })
+        });
+    } catch(e) {}
+
+    // Удаляем запрос
+    await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?id=eq.${reqId}`, {
+        method: 'DELETE',
+        headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
+    });
+
+    fetchRequestsFromSupabase();
+    fetchFriendsFromSupabase();
+    document.getElementById('notifications-modal').style.display = 'none';
+    alert("✨ Друг добавлен!");
+}
+
+async function declineFriend(reqId) {
+    await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?id=eq.${reqId}`, {
+        method: 'DELETE',
+        headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
+    });
+    fetchRequestsFromSupabase();
+    openNotificationsModal();
+}
+
+function loadFriendsFromStorage() {
+    fetchFriendsFromSupabase();
+}
+
+function renderFriendsList() {
+    const container = document.getElementById('friends-list-container');
+    if (!container) return;
+    if (friendsList.length === 0) {
+        container.innerHTML = `<div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; padding: 10px;">Список друзей пуст</div>`;
+        return;
+    }
+    container.innerHTML = '';
+    friendsList.forEach(friend => {
+        const item = document.createElement('div');
+        item.className = 'friend-card';
+        const displayId = Number(friend.id) === Number(OWNER_ID) ? "1" : friend.id;
+        
+        item.onclick = () => {
+            openUserProfileCard(friend.id, friend.name);
+        };
+
+        item.innerHTML = `
+            <div style="width: 32px; height: 32px; background: #3c124a; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px;">👤</div>
+            <div class="room-info" style="flex: 1;">
+                <div class="room-name">${escapeHtml(friend.name)}</div>
+                <div class="room-track">ID: #lure_${displayId}</div>
+            </div>
+        `;
+        container.appendChild(item);
+    });
+}
+
+// ================= АУДИО И ВИДЕО ПЛЕЕРЫ =================
 async function addTrackToQueue() {
     const input = document.getElementById('track-input');
     const val = input.value.trim();
@@ -679,7 +839,6 @@ function renderQueueList() {
     });
 }
 
-// ================= YOUTUBE IFRAME API (ИДЕАЛЬНАЯ СИНХРОНИЗАЦИЯ ВИДЕО) =================
 function extractYouTubeId(url) {
     if (!url) return null;
     let regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
@@ -721,16 +880,12 @@ async function toggleVideoPlay() {
     if (!ytPlayer || typeof ytPlayer.getPlayerState !== 'function') return;
 
     const state = ytPlayer.getPlayerState();
-    // 1 - Playing, 2 - Paused
     let newPlaying = (state !== 1); 
     let currentTime = 0;
     try { currentTime = ytPlayer.getCurrentTime() || 0; } catch(e) {}
 
-    if (newPlaying) {
-        ytPlayer.playVideo();
-    } else {
-        ytPlayer.pauseVideo();
-    }
+    if (newPlaying) ytPlayer.playVideo();
+    else ytPlayer.pauseVideo();
 
     if (currentActiveRoomId) {
         await updateRoomInSupabase(currentActiveRoomId, { is_playing: newPlaying, video_time: currentTime });
@@ -749,8 +904,7 @@ function syncVideoPlayerWithApi(room) {
     const videoId = extractYouTubeId(video.title);
     const isHost = (currentRoomHost === currentUserName) || isModModeActive;
 
-    const statusText = isHost ? "Управляете вы (Хост)" : `Хост: ${currentRoomHost}`;
-    document.getElementById('video-control-status').textContent = statusText;
+    document.getElementById('video-control-status').textContent = isHost ? "Управляете вы (Хост)" : `Хост: ${currentRoomHost}`;
 
     const playBtn = document.getElementById('video-play-btn');
     if (playBtn) playBtn.textContent = room.is_playing ? '⏸' : '▶';
@@ -760,7 +914,6 @@ function syncVideoPlayerWithApi(room) {
         return;
     }
 
-    // Если API загрузился и плеер еще не создан — создаем
     if (isApiReady) {
         if (!ytPlayer) {
             const container = document.getElementById('youtube-player-box');
@@ -773,7 +926,7 @@ function syncVideoPlayerWithApi(room) {
                 playerVars: { 'autoplay': 1, 'controls': isHost ? 1 : 0, 'modestbranding': 1 },
                 events: {
                     'onReady': (event) => {
-                        if (!isHost) event.target.mute(); // зрителям мутим, чтобы не было эха
+                        if (!isHost) event.target.mute();
                         event.target.seekTo(room.video_time || 0, true);
                         if (room.is_playing) event.target.playVideo();
                         else event.target.pauseVideo();
@@ -781,30 +934,21 @@ function syncVideoPlayerWithApi(room) {
                 }
             });
         } else {
-            // Плеер уже есть, проверяем смену видео или синхронизацию
             try {
                 const currentUrl = ytPlayer.getVideoUrl ? ytPlayer.getVideoUrl() : '';
                 if (!currentUrl.includes(videoId)) {
                     ytPlayer.loadVideoById({ videoId: videoId, startSeconds: room.video_time || 0 });
                 } else {
-                    // Синхронизация времени и паузы для зрителей
                     if (!isHost) {
                         const localTime = ytPlayer.getCurrentTime() || 0;
                         const targetTime = room.video_time || 0;
-
-                        // Если рассинхрон больше 2 секунд — подтягиваем таймкод
                         if (Math.abs(localTime - targetTime) > 2.0) {
                             ytPlayer.seekTo(targetTime, true);
                         }
-
                         const state = ytPlayer.getPlayerState();
-                        if (room.is_playing && state !== 1) {
-                            ytPlayer.playVideo();
-                        } else if (!room.is_playing && state === 1) {
-                            ytPlayer.pauseVideo();
-                        }
+                        if (room.is_playing && state !== 1) ytPlayer.playVideo();
+                        else if (!room.is_playing && state === 1) ytPlayer.pauseVideo();
                     } else {
-                        // Если хост — каждые 3 секунды кидаем актуальный таймкод в базу
                         const hostTime = ytPlayer.getCurrentTime() || 0;
                         const state = ytPlayer.getPlayerState();
                         const isPlayingNow = (state === 1 || state === 3);
@@ -831,7 +975,7 @@ function renderVideoQueueList() {
     });
 }
 
-// ================= ОТПРАВКА СООБЩЕНИЙ В ЧАТ =================
+// ================= ЧАТ И ЖАЛОБЫ =================
 async function sendMessage() {
     if (isChatMuted || !currentActiveRoomId) return;
     const input = document.getElementById('chat-input');
@@ -877,159 +1021,6 @@ async function sendVideoMessage() {
     await syncActiveRoomState();
 }
 function handleVideoKeyPress(event) { if (event.key === 'Enter') sendVideoMessage(); }
-
-// ================= СИСТЕМА ДРУЗЕЙ И МОДЕРАЦИЯ =================
-async function fetchRequestsFromSupabase() {
-    try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?target_id=eq.${currentUserId}&select=*`, {
-            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
-        });
-        if (res.ok) {
-            pendingFriendRequests = await res.json();
-            updateNotifBadge();
-        }
-    } catch (e) {}
-}
-
-async function addFriendAction() {
-    const input = document.getElementById('add-friend-input');
-    const val = input.value.trim().replace('#lure_', '');
-    if (!val || isNaN(val)) { alert("⚠️ Введите корректный числовой ID друга!"); return; }
-    if (Number(val) === Number(currentUserId)) { alert("⛔ Нельзя добавить себя!"); return; }
-
-    try {
-        await fetch(`${SUPABASE_URL}/rest/v1/friend_requests`, {
-            method: 'POST',
-            headers: {
-                "apikey": SUPABASE_ANON_KEY,
-                "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-                "Content-Type": "application/json",
-                "Prefer": "return=minimal"
-            },
-            body: JSON.stringify({ sender_id: currentUserId, sender_name: currentUserName, target_id: Number(val) })
-        });
-        alert("📨 Заявка в друзья отправлена!");
-        input.value = '';
-    } catch (e) { alert("Ошибка отправки."); }
-}
-
-function updateNotifBadge() {
-    const count = pendingFriendRequests.length;
-    const badge = document.getElementById('notif-badge');
-    if (badge) {
-        badge.textContent = count;
-        badge.style.display = count > 0 ? 'block' : 'none';
-    }
-}
-
-function openNotificationsModal() {
-    const container = document.getElementById('notifications-list-container');
-    const sub = document.getElementById('notif-modal-text');
-    if (pendingFriendRequests.length === 0) {
-        sub.textContent = "Нет новых заявок";
-        container.innerHTML = `<div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; padding: 10px;">📭 Пусто</div>`;
-    } else {
-        sub.textContent = "Входящие заявки:";
-        container.innerHTML = '';
-        pendingFriendRequests.forEach(req => {
-            const row = document.createElement('div');
-            row.className = 'modal-friend-row';
-            row.innerHTML = `
-                <span>👤 ${escapeHtml(req.sender_name)} (#lure_${req.sender_id})</span>
-                <div>
-                    <button class="modal-invite-action" onclick="acceptFriend(${req.sender_id}, '${escapeHtml(req.sender_name)}', ${req.id})">Принять</button>
-                    <button class="modal-decline-action" onclick="declineFriend(${req.id})">Х</button>
-                </div>
-            `;
-            container.appendChild(row);
-        });
-    }
-    document.getElementById('notifications-modal').style.display = 'flex';
-}
-
-async function acceptFriend(senderId, senderName, reqId) {
-    friendsList.push({ id: senderId, name: senderName });
-    localStorage.setItem(`lure_friends_${currentUserId}`, JSON.stringify(friendsList));
-    renderFriendsList();
-    await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?id=eq.${reqId}`, {
-        method: 'DELETE',
-        headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
-    });
-    fetchRequestsFromSupabase();
-    document.getElementById('notifications-modal').style.display = 'none';
-    alert("✨ Друг добавлен!");
-}
-
-async function declineFriend(reqId) {
-    await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?id=eq.${reqId}`, {
-        method: 'DELETE',
-        headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
-    });
-    fetchRequestsFromSupabase();
-    openNotificationsModal();
-}
-
-function loadFriendsFromStorage() {
-    const saved = localStorage.getItem(`lure_friends_${currentUserId}`);
-    if (saved) { try { friendsList = JSON.parse(saved); } catch(e) { friendsList = []; } }
-    renderFriendsList();
-}
-
-function renderFriendsList() {
-    const container = document.getElementById('friends-list-container');
-    if (!container) return;
-    if (friendsList.length === 0) {
-        container.innerHTML = `<div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; padding: 10px;">Список друзей пуст</div>`;
-        return;
-    }
-    container.innerHTML = '';
-    friendsList.forEach(friend => {
-        const item = document.createElement('div');
-        item.className = 'friend-card';
-        item.innerHTML = `
-            <div style="width: 32px; height: 32px; background: #3c124a; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px;">👤</div>
-            <div class="room-info" style="flex: 1;">
-                <div class="room-name">${escapeHtml(friend.name)}</div>
-                <div class="room-track" style="color: #5eff8b;">ID: #lure_${friend.id} • В сети</div>
-            </div>
-            <button onclick="removeFriend('${friend.id}')" style="background: rgba(255,50,80,0.1); border: 1px solid rgba(255,50,80,0.3); color: #ff8e8e; padding: 4px 8px; border-radius: 6px; font-size: 10px; cursor:pointer;">Удалить</button>
-        `;
-        container.appendChild(item);
-    });
-}
-
-function removeFriend(id) {
-    if (confirm("🗑️ Удалить из друзей?")) {
-        friendsList = friendsList.filter(f => String(f.id) !== String(id));
-        localStorage.setItem(`lure_friends_${currentUserId}`, JSON.stringify(friendsList));
-        renderFriendsList();
-    }
-}
-
-async function reportRoom() {
-    const reason = prompt("⚠️ Укажите причину жалобы на эту комнату:");
-    if (!reason) return;
-    try {
-        await fetch(`${SUPABASE_URL}/rest/v1/reports`, {
-            method: 'POST',
-            headers: {
-                "apikey": SUPABASE_ANON_KEY,
-                "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-                "Content-Type": "application/json",
-                "Prefer": "return=minimal"
-            },
-            body: JSON.stringify({
-                room_name: currentRoomName,
-                host_name: currentRoomHost,
-                reporter_id: currentUserId,
-                reporter_name: currentUserName,
-                reason: reason,
-                created_at: Date.now()
-            })
-        });
-        alert("📨 Жалоба отправлена администраторам!");
-    } catch (e) { alert("Ошибка при отправке жалобы."); }
-}
 
 async function reportUserProfile() {
     const reason = prompt("⚠️ Укажите причину жалобы на этого пользователя:");
@@ -1127,8 +1118,13 @@ function openUserProfileCard(userId, userName) {
     targetPunishUserId = userId;
     targetPunishUserName = userName;
     document.getElementById('other-user-name').textContent = userName;
-    document.getElementById('other-user-id').textContent = `#lure_${userId} 📋`;
-    document.getElementById('other-user-status').textContent = "в сети • вайб в гармонии";
+    
+    const displayId = Number(userId) === Number(OWNER_ID) ? "1" : userId;
+    document.getElementById('other-user-id').textContent = `#lure_${displayId} 📋`;
+    
+    // Подтягиваем актуальный статус из локального хранилища если есть, иначе дефолт
+    const savedStatus = localStorage.getItem(`lure_status_${userId}`) || "в сети • вайб в гармонии";
+    document.getElementById('other-user-status').textContent = savedStatus;
 
     const isUserOwner = isOwner(userId);
     const otherCrown = document.getElementById('other-user-crown');
