@@ -1,6 +1,6 @@
 // ================= НАСТРОЙКИ СУПЕРБЕЙС И АДМИНИСТРИРОВАНИЯ =================
 const OWNER_ID = 8982002623; // Твой главный цифровой ID
-const ADMIN_IDS = []; // ID других модераторов
+const ADMIN_IDS = []; 
 
 const SUPABASE_URL = "https://klwjfgbhxizejlvqyoqm.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_PatHI_UfqW4z56DlLRNNzw_6wr1e4uM";
@@ -157,6 +157,10 @@ async function syncAllData() {
     await fetchFriendsFromSupabase();
     if (currentActiveRoomId) {
         await syncActiveRoomState();
+        // Хост пингует комнату, показывая, что он в сети
+        if (currentRoomHost === currentUserName) {
+            await updateRoomInSupabase(currentActiveRoomId, { last_ping: Date.now() });
+        }
     }
 }
 
@@ -240,11 +244,17 @@ async function fetchRoomsFromSupabase() {
         if (!res.ok) return;
         const data = await res.json();
         const now = Date.now();
-        activeRooms = data.filter(room => {
+
+        // Автоудаление комнат, если хост вышел из приложения (нет пинга > 30 сек)
+        for (const room of data) {
+            const lastPing = room.last_ping || room.created_at;
             const membersCount = Array.isArray(room.members) ? room.members.length : 0;
-            if (membersCount > 0) return true;
-            return (now - Number(room.created_at)) < 300000;
-        });
+            if (membersCount === 0 || (now - lastPing > 30000)) {
+                await deleteRoomFromSupabase(room.id);
+            }
+        }
+
+        activeRooms = data.filter(room => room.members && room.members.length > 0);
         renderRoomsList();
     } catch (e) {}
 }
@@ -261,15 +271,10 @@ async function saveRoomToSupabase(roomObj) {
             },
             body: JSON.stringify(roomObj)
         });
-        if (!res.ok) {
-            const errText = await res.text();
-            alert(`❌ Ошибка базы данных (${res.status}): ${errText}`);
-            return false;
-        }
+        if (!res.ok) return false;
         await fetchRoomsFromSupabase();
         return true;
     } catch (e) {
-        alert(`❌ Сетевая ошибка: ${e.message}`);
         return false;
     }
 }
@@ -374,6 +379,7 @@ async function submitCreateRoom() {
             details: detailsText,
             is_private: isPrivate,
             created_at: Date.now(),
+            last_ping: Date.now(),
             members: initialMembers,
             messages: [],
             media_queue: [],
@@ -489,19 +495,14 @@ function renderSyncedChat() {
         const safeName = escapeHtml(msg.author);
         const safeText = escapeHtml(msg.text);
         const color = msg.color || '#b873e8';
-        html += `<div class="chat-msg"><div><span class="author" style="color: ${color};" data-uid="${msg.uid}" data-uname="${safeName}" onclick="handleAuthorClick(this)">${safeName}:</span> ${safeText}</div></div>`;
+        // Передаем полную информацию о пользователе при клике в чате
+        html += `<div class="chat-msg"><div><span class="author" style="color: ${color};" onclick="openUserProfileCard('${msg.uid}', '${safeName}', '${encodeURIComponent(msg.avatar || '👤')}', '${encodeURIComponent(msg.status || '')}')">${safeName}:</span> ${safeText}</div></div>`;
     });
 
     if (container.innerHTML !== html) {
         container.innerHTML = html;
         container.scrollTop = container.scrollHeight;
     }
-}
-
-function handleAuthorClick(el) {
-    const uid = el.getAttribute('data-uid');
-    const uname = el.getAttribute('data-uname');
-    openUserProfileCard(uid, uname);
 }
 
 function renderHostControls(type) {
@@ -546,7 +547,7 @@ async function closeRoom(skipRemoveMember = false) {
     fetchRoomsFromSupabase();
 }
 
-// ================= МОДАЛКА УЧАСТНИКОВ (ПРАВИЛЬНЫЙ КИК ДЛЯ ХОСТА И ПРОФИЛЬ) =================
+// ================= МОДАЛКА УЧАСТНИКОВ (КНОПКА КИК ДЛЯ ХОСТА) =================
 function openMembersModal() {
     const container = document.getElementById('members-list-container');
     if (!container) return;
@@ -555,8 +556,7 @@ function openMembersModal() {
         container.innerHTML = `<div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center;">В комнате никого нет</div>`;
     } else {
         container.innerHTML = '';
-        const isHost = (currentRoomHost === currentUserName);
-        const isHostOrAdmin = isHost || isAdmin(currentUserId);
+        const isHost = (currentRoomHost === currentUserName) || isModModeActive;
         const isUserAdminOrOwner = isAdmin(currentUserId);
 
         roomMembers.forEach(m => {
@@ -568,12 +568,12 @@ function openMembersModal() {
             const avaText = m.avatar && m.avatar.startsWith('http') ? '' : (m.avatar || '👤');
 
             let buttonsHtml = '';
-            // Кнопка профиля гарантированно работает и вызывает карточку пользователя
-            buttonsHtml += `<button class="modal-btn-action" onclick="openUserProfileCard('${m.id}', '${escapeHtml(m.name)}'); closeMembersModalDirect();">Профиль</button>`;
+            // Кнопка профиля передает актуальные данные участника
+            buttonsHtml += `<button class="modal-btn-action" onclick="openUserProfileCard('${m.id}', '${escapeHtml(m.name)}', '${encodeURIComponent(m.avatar || '👤')}', '${encodeURIComponent(m.status || '')}'); closeMembersModalDirect();">Профиль</button>`;
             
             if (!isMe) {
-                // Хост комнаты или админ могут кикать участников
-                if (isHostOrAdmin && !isOwner(m.id)) {
+                // У хоста или админа всегда есть кнопка кика (не работает только на владельце)
+                if ((isHost || isUserAdminOrOwner) && !isOwner(m.id)) {
                     buttonsHtml += `<button class="modal-btn-kick" onclick="kickMember('${m.id}')">Кик</button>`;
                 }
                 if (isUserAdminOrOwner && !isOwner(m.id)) {
@@ -636,13 +636,14 @@ async function fetchFriendsFromSupabase() {
         });
         if (res.ok) {
             const data = await res.json();
-            friendsList = data.map(f => {
+            let map = new Map();
+            data.forEach(f => {
                 const isMeUser = Number(f.user_id) === Number(currentUserId);
-                return {
-                    id: isMeUser ? f.friend_id : f.user_id,
-                    name: isMeUser ? f.friend_name : f.user_name
-                };
+                const friendId = isMeUser ? f.friend_id : f.user_id;
+                const friendName = isMeUser ? f.friend_name : f.user_name;
+                map.set(friendId, { id: friendId, name: friendName });
             });
+            friendsList = Array.from(map.values());
             renderFriendsList();
         }
     } catch(e) {}
@@ -979,6 +980,8 @@ async function sendMessage() {
         uid: currentUserId,
         author: currentUserName,
         color: currentNicknameColor,
+        avatar: currentUserAvatar,
+        status: currentUserStatus,
         text: text
     }];
     await updateRoomInSupabase(currentActiveRoomId, { messages: updatedMessages });
@@ -1002,6 +1005,8 @@ async function sendVideoMessage() {
         uid: currentUserId,
         author: currentUserName,
         color: currentNicknameColor,
+        avatar: currentUserAvatar,
+        status: currentUserStatus,
         text: text
     }];
     await updateRoomInSupabase(currentActiveRoomId, { messages: updatedMessages });
@@ -1126,7 +1131,7 @@ function simulatePayment() {
 
 function updateNicknameColor(color) { currentNicknameColor = color; }
 
-function openUserProfileCard(userId, userName) {
+function openUserProfileCard(userId, userName, encodedAvatar = '', encodedStatus = '') {
     targetPunishUserId = userId;
     targetPunishUserName = userName;
     document.getElementById('other-user-name').textContent = userName;
@@ -1134,9 +1139,20 @@ function openUserProfileCard(userId, userName) {
     const displayId = Number(userId) === Number(OWNER_ID) ? "1" : userId;
     document.getElementById('other-user-id').textContent = `#lure_${displayId} 📋`;
     
-    // Берем реальный статус пользователя из локального хранилища, убрав заглушку
-    const savedStatus = localStorage.getItem(`lure_status_${userId}`) || "";
-    document.getElementById('other-user-status').textContent = savedStatus || "не указан";
+    // Декодируем переданный статус и аватарку или берем из localStorage
+    let decodedStatus = encodedStatus ? decodeURIComponent(encodedStatus) : (localStorage.getItem(`lure_status_${userId}`) || "");
+    let decodedAvatar = encodedAvatar ? decodeURIComponent(encodedAvatar) : "🦇";
+
+    document.getElementById('other-user-status').textContent = decodedStatus || "не указан";
+
+    const avaContainer = document.getElementById('other-user-ava');
+    if (decodedAvatar.startsWith('http')) {
+        avaContainer.style.backgroundImage = `url('${decodedAvatar}')`;
+        avaContainer.textContent = '';
+    } else {
+        avaContainer.style.backgroundImage = 'none';
+        avaContainer.textContent = decodedAvatar;
+    }
 
     const isUserOwner = isOwner(userId);
     const otherCrown = document.getElementById('other-user-crown');
