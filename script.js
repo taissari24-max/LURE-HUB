@@ -2,7 +2,6 @@
 const OWNER_ID = 8982002623; // Твой главный цифровой ID
 const ADMIN_IDS = []; // ID других модераторов
 
-// Вставь сюда данные своего проекта из панели Supabase:
 const SUPABASE_URL = "https://klwjfgbhxizejlvqyoqm.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_PatHI_UfqW4z56DlLRNNzw_6wr1e4uM";
 // ==============================================================================
@@ -14,8 +13,7 @@ let currentRoomHost = "";
 let currentRoomType = "audio";
 let currentNicknameColor = "#b873e8";
 let currentUserAvatar = "🦇";
-let currentUserStatus = "я омега";
-let sessionStartTime = Date.now();
+let currentUserStatus = "в поисках музыки под дождь 🌧️";
 
 let isPremiumUser = false;
 let isBannedUser = false;  
@@ -29,7 +27,6 @@ let targetPunishUserId = null;
 let targetPunishUserName = "";
 let currentActiveRoomId = null;
 
-// Состояние текущей комнаты (синхронизируется с Supabase)
 let roomMembers = [];
 let roomMessages = [];
 let mediaQueue = [];
@@ -37,7 +34,6 @@ let currentMediaIndex = 0;
 let isVideoPlaying = true;
 let videoCurrentTime = 0;
 
-// YouTube Iframe API переменные
 let ytPlayer = null;
 let isApiReady = false;
 
@@ -96,8 +92,6 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('profile-id-text').textContent = `#lure_${displayId} 📋`;
 
     loadFriendsFromStorage();
-    
-    setInterval(updateSessionTimer, 60000);
 
     syncAllData();
     setInterval(syncAllData, 3000);
@@ -155,13 +149,6 @@ function updateHeaderUI() {
             profileAva.textContent = currentUserAvatar;
         }
     }
-}
-
-function updateSessionTimer() {
-    const minutes = Math.floor((Date.now() - sessionStartTime) / 60000);
-    const hours = (minutes / 60).toFixed(1);
-    const statValEl = document.querySelector('.stat-value');
-    if (statValEl) statValEl.textContent = `${hours} ч`;
 }
 
 async function syncAllData() {
@@ -559,7 +546,7 @@ async function closeRoom(skipRemoveMember = false) {
     fetchRoomsFromSupabase();
 }
 
-// ================= МОДАЛКА УЧАСТНИКОВ (КИК + ПЕРЕХОД В ПРОФИЛЬ) =================
+// ================= МОДАЛКА УЧАСТНИКОВ (ПРАВИЛЬНЫЙ КИК ДЛЯ ХОСТА И ПРОФИЛЬ) =================
 function openMembersModal() {
     const container = document.getElementById('members-list-container');
     if (!container) return;
@@ -568,7 +555,8 @@ function openMembersModal() {
         container.innerHTML = `<div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center;">В комнате никого нет</div>`;
     } else {
         container.innerHTML = '';
-        const isHostOrAdmin = (currentRoomHost === currentUserName) || isAdmin(currentUserId);
+        const isHost = (currentRoomHost === currentUserName);
+        const isHostOrAdmin = isHost || isAdmin(currentUserId);
         const isUserAdminOrOwner = isAdmin(currentUserId);
 
         roomMembers.forEach(m => {
@@ -580,10 +568,11 @@ function openMembersModal() {
             const avaText = m.avatar && m.avatar.startsWith('http') ? '' : (m.avatar || '👤');
 
             let buttonsHtml = '';
-            // Кнопка профиля теперь работает всегда для всех участников
+            // Кнопка профиля гарантированно работает и вызывает карточку пользователя
             buttonsHtml += `<button class="modal-btn-action" onclick="openUserProfileCard('${m.id}', '${escapeHtml(m.name)}'); closeMembersModalDirect();">Профиль</button>`;
             
             if (!isMe) {
+                // Хост комнаты или админ могут кикать участников
                 if (isHostOrAdmin && !isOwner(m.id)) {
                     buttonsHtml += `<button class="modal-btn-kick" onclick="kickMember('${m.id}')">Кик</button>`;
                 }
@@ -627,7 +616,7 @@ async function kickMember(targetId) {
 function closeMembersModalDirect() { document.getElementById('members-modal').style.display = 'none'; }
 function closeMembersModal(event) { if (event.target.id === 'members-modal') document.getElementById('members-modal').style.display = 'none'; }
 
-// ================= СИСТЕМА ДРУЗЕЙ И УВЕДОМЛЕНИЙ (СИММЕТРИЧНЫЕ ДРУЗЬЯ) =================
+// ================= СИСТЕМА ДРУЗЕЙ И УВЕДОМЛЕНИЙ =================
 async function fetchRequestsFromSupabase() {
     try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?target_id=eq.${currentUserId}&select=*`, {
@@ -722,7 +711,6 @@ function openNotificationsModal() {
 }
 
 async function acceptFriend(senderId, senderName, reqId) {
-    // Записываем дружбу в обе стороны в Supabase таблицу friends
     try {
         await fetch(`${SUPABASE_URL}/rest/v1/friends`, {
             method: 'POST',
@@ -741,7 +729,6 @@ async function acceptFriend(senderId, senderName, reqId) {
         });
     } catch(e) {}
 
-    // Удаляем запрос
     await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?id=eq.${reqId}`, {
         method: 'DELETE',
         headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
@@ -1022,6 +1009,31 @@ async function sendVideoMessage() {
 }
 function handleVideoKeyPress(event) { if (event.key === 'Enter') sendVideoMessage(); }
 
+async function reportRoom() {
+    const reason = prompt("⚠️ Укажите причину жалобы на эту комнату:");
+    if (!reason) return;
+    try {
+        await fetch(`${SUPABASE_URL}/rest/v1/reports`, {
+            method: 'POST',
+            headers: {
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            },
+            body: JSON.stringify({
+                room_name: currentRoomName,
+                host_name: currentRoomHost,
+                reporter_id: currentUserId,
+                reporter_name: currentUserName,
+                reason: reason,
+                created_at: Date.now()
+            })
+        });
+        alert("📨 Жалоба отправлена администраторам!");
+    } catch (e) { alert("Ошибка при отправке жалобы."); }
+}
+
 async function reportUserProfile() {
     const reason = prompt("⚠️ Укажите причину жалобы на этого пользователя:");
     if (!reason) return;
@@ -1122,9 +1134,9 @@ function openUserProfileCard(userId, userName) {
     const displayId = Number(userId) === Number(OWNER_ID) ? "1" : userId;
     document.getElementById('other-user-id').textContent = `#lure_${displayId} 📋`;
     
-    // Подтягиваем актуальный статус из локального хранилища если есть, иначе дефолт
-    const savedStatus = localStorage.getItem(`lure_status_${userId}`) || "в сети • вайб в гармонии";
-    document.getElementById('other-user-status').textContent = savedStatus;
+    // Берем реальный статус пользователя из локального хранилища, убрав заглушку
+    const savedStatus = localStorage.getItem(`lure_status_${userId}`) || "";
+    document.getElementById('other-user-status').textContent = savedStatus || "не указан";
 
     const isUserOwner = isOwner(userId);
     const otherCrown = document.getElementById('other-user-crown');
