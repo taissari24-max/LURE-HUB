@@ -56,9 +56,7 @@
                     </div>
                 </div>
                 <div style="display: flex; gap: 6px; align-items: center;">
-                    <!-- Кнопка Щит Админа (видна только OWNER_ID) -->
                     <button class="action-icon-btn" id="admin-panel-btn" onclick="toggleModMode()" style="display: none; background: rgba(255,50,80,0.15); border: 1px solid rgba(255,50,80,0.3);" title="Режим модератора (Щит)">🛡️</button>
-                    <!-- Кнопка уведомлений с бейджем -->
                     <div class="icon-btn-wrap" onclick="openNotificationsModal()">
                         <button class="icon-btn" title="Уведомления">🔔</button>
                         <div class="notif-badge" id="notif-badge" style="display: none;">0</div>
@@ -72,9 +70,7 @@
             </button>
 
             <div class="section-title">Активные комнаты и эфиры</div>
-            <div class="rooms-list" id="rooms-list-container">
-                <!-- Комнаты появляются здесь -->
-            </div>
+            <div class="rooms-list" id="rooms-list-container"></div>
         </div>
 
         <!-- ================= ЭКРАН АУДИО-КОМНАТЫ ================= -->
@@ -150,7 +146,6 @@
             </div>
 
             <div class="compact-video-card">
-                <!-- Контейнер для официального YouTube Iframe API плеера -->
                 <div class="compact-video-screen" id="youtube-player-box">
                     <div class="video-placeholder-art" id="video-placeholder-art">🎬</div>
                 </div>
@@ -228,16 +223,13 @@
                 <div class="profile-field-title">Статус / Вайб</div>
                 <input type="text" class="profile-input" id="profile-status-input" value="" oninput="updateProfileStatus(this.value)">
 
-                <div class="profile-stats-grid">
-                    <div class="stat-box">
+                <!-- Убрали неработающую плашку «В LURE», оставив только «В эфире» и «Комнат» -->
+                <div class="profile-stats-grid" style="display: flex; gap: 8px;">
+                    <div class="stat-box" style="flex: 1;">
                         <div class="stat-value">0 ч</div>
                         <div class="stat-label">В эфире</div>
                     </div>
-                    <div class="stat-box">
-                        <div class="stat-value">Сегодня</div>
-                        <div class="stat-label">В LURE</div>
-                    </div>
-                    <div class="stat-box">
+                    <div class="stat-box" style="flex: 1;">
                         <div class="stat-value">0</div>
                         <div class="stat-label">Комнат</div>
                     </div>
@@ -263,7 +255,7 @@
             </div>
         </div>
 
-        <!-- ================= СТРАНИЦА ЧУЖОГО ПРОФИЛЯ (МОДЕРАЦИЯ И БАНЫ) ================= -->
+        <!-- ================= СТРАНИЦА ЧУЖОГО ПРОФИЛЯ ================= -->
         <div id="other-profile-view" class="view-content">
             <div class="room-top-bar">
                 <button class="back-btn" onclick="switchMainTab('menu')">← Назад</button>
@@ -288,7 +280,10 @@
                 <div class="profile-field-title">Статус / Вайб</div>
                 <div class="profile-field" id="other-user-status">в сети</div>
 
-                <!-- Кнопки бана/мута (видны админу при клике на пользователя) -->
+                <!-- Кнопка жалобы на пользователя -->
+                <button class="report-profile-btn" onclick="reportUserProfile()">⚠️ Пожаловаться на профиль</button>
+
+                <!-- Панель модератора (баны/муты для админа) -->
                 <div id="admin-punish-container" style="width: 100%; margin-top: 10px; display: none; flex-direction: column; gap: 6px;">
                     <div class="profile-field-title" style="color: #ff8ea8;">Панель модератора 🛡️</div>
                     <button class="ban-profile-btn" onclick="openPunishMenu('mute')">Выдать мут 🔇</button>
