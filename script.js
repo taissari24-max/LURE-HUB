@@ -14,7 +14,7 @@ let currentRoomHost = "";
 let currentRoomType = "audio";
 let currentNicknameColor = "#b873e8";
 let currentUserAvatar = "🦇";
-let currentUserStatus = "в поисках музыки под дождь 🌧️";
+let currentUserStatus = "я омега";
 let sessionStartTime = Date.now();
 
 let isPremiumUser = false;
