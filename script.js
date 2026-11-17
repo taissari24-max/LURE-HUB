@@ -157,7 +157,6 @@ async function syncAllData() {
     await fetchFriendsFromSupabase();
     if (currentActiveRoomId) {
         await syncActiveRoomState();
-        // Хост пингует комнату, показывая, что он в сети
         if (currentRoomHost === currentUserName) {
             await updateRoomInSupabase(currentActiveRoomId, { last_ping: Date.now() });
         }
@@ -245,7 +244,6 @@ async function fetchRoomsFromSupabase() {
         const data = await res.json();
         const now = Date.now();
 
-        // Автоудаление комнат, если хост вышел из приложения (нет пинга > 30 сек)
         for (const room of data) {
             const lastPing = room.last_ping || room.created_at;
             const membersCount = Array.isArray(room.members) ? room.members.length : 0;
@@ -393,9 +391,13 @@ async function submitCreateRoom() {
             nameInput.value = '';
             document.getElementById('create-modal').style.display = 'none';
             openRoom(roomType, roomTitle, detailsText, initialMembers.length, currentUserName, newRoomObj.id);
+        } else {
+            alert("❌ Не удалось создать комнату в базе. Попробуйте еще раз.");
         }
+    } catch (e) {
+        alert("❌ Ошибка соединения.");
     } finally {
-        if (createBtn) createBtn.disabled = false;
+        if (createBtn) createBtn.disabled = false; // Всегда разблокируем кнопку!
     }
 }
 
@@ -495,7 +497,6 @@ function renderSyncedChat() {
         const safeName = escapeHtml(msg.author);
         const safeText = escapeHtml(msg.text);
         const color = msg.color || '#b873e8';
-        // Передаем полную информацию о пользователе при клике в чате
         html += `<div class="chat-msg"><div><span class="author" style="color: ${color};" onclick="openUserProfileCard('${msg.uid}', '${safeName}', '${encodeURIComponent(msg.avatar || '👤')}', '${encodeURIComponent(msg.status || '')}')">${safeName}:</span> ${safeText}</div></div>`;
     });
 
@@ -547,7 +548,7 @@ async function closeRoom(skipRemoveMember = false) {
     fetchRoomsFromSupabase();
 }
 
-// ================= МОДАЛКА УЧАСТНИКОВ (КНОПКА КИК ДЛЯ ХОСТА) =================
+// ================= МОДАЛКА УЧАСТНИКОВ =================
 function openMembersModal() {
     const container = document.getElementById('members-list-container');
     if (!container) return;
@@ -568,11 +569,9 @@ function openMembersModal() {
             const avaText = m.avatar && m.avatar.startsWith('http') ? '' : (m.avatar || '👤');
 
             let buttonsHtml = '';
-            // Кнопка профиля передает актуальные данные участника
             buttonsHtml += `<button class="modal-btn-action" onclick="openUserProfileCard('${m.id}', '${escapeHtml(m.name)}', '${encodeURIComponent(m.avatar || '👤')}', '${encodeURIComponent(m.status || '')}'); closeMembersModalDirect();">Профиль</button>`;
             
             if (!isMe) {
-                // У хоста или админа всегда есть кнопка кика (не работает только на владельце)
                 if ((isHost || isUserAdminOrOwner) && !isOwner(m.id)) {
                     buttonsHtml += `<button class="modal-btn-kick" onclick="kickMember('${m.id}')">Кик</button>`;
                 }
@@ -616,7 +615,7 @@ async function kickMember(targetId) {
 function closeMembersModalDirect() { document.getElementById('members-modal').style.display = 'none'; }
 function closeMembersModal(event) { if (event.target.id === 'members-modal') document.getElementById('members-modal').style.display = 'none'; }
 
-// ================= СИСТЕМА ДРУЗЕЙ И УВЕДОМЛЕНИЙ =================
+// ================= ИСПРАВЛЕННАЯ СИСТЕМА ДРУЗЕЙ И БАЗЫ =================
 async function fetchRequestsFromSupabase() {
     try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?target_id=eq.${currentUserId}&select=*`, {
@@ -659,7 +658,7 @@ async function addFriendAction() {
     if (targetDigitalId === Number(currentUserId)) { alert("⛔ Нельзя добавить себя!"); return; }
 
     try {
-        await fetch(`${SUPABASE_URL}/rest/v1/friend_requests`, {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/friend_requests`, {
             method: 'POST',
             headers: {
                 "apikey": SUPABASE_ANON_KEY,
@@ -669,9 +668,15 @@ async function addFriendAction() {
             },
             body: JSON.stringify({ sender_id: currentUserId, sender_name: currentUserName, target_id: targetDigitalId })
         });
-        alert("📨 Заявка в друзья отправлена!");
-        input.value = '';
-    } catch (e) { alert("Ошибка отправки."); }
+        
+        if (res.ok) {
+            alert("📨 Заявка в друзья отправлена!");
+            input.value = '';
+        } else {
+            const errText = await res.text();
+            alert(`❌ Ошибка добавления: ${errText}`);
+        }
+    } catch (e) { alert("Ошибка сети при отправке заявки."); }
 }
 
 function updateNotifBadge() {
@@ -713,6 +718,7 @@ function openNotificationsModal() {
 
 async function acceptFriend(senderId, senderName, reqId) {
     try {
+        // Записываем дружбу в обе стороны в таблицу friends
         await fetch(`${SUPABASE_URL}/rest/v1/friends`, {
             method: 'POST',
             headers: {
@@ -728,6 +734,22 @@ async function acceptFriend(senderId, senderName, reqId) {
                 user_name: currentUserName
             })
         });
+
+        await fetch(`${SUPABASE_URL}/rest/v1/friends`, {
+            method: 'POST',
+            headers: {
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            },
+            body: JSON.stringify({
+                user_id: senderId,
+                friend_id: currentUserId,
+                friend_name: currentUserName,
+                user_name: senderName
+            })
+        });
     } catch(e) {}
 
     await fetch(`${SUPABASE_URL}/rest/v1/friend_requests?id=eq.${reqId}`, {
@@ -735,10 +757,10 @@ async function acceptFriend(senderId, senderName, reqId) {
         headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` }
     });
 
-    fetchRequestsFromSupabase();
-    fetchFriendsFromSupabase();
+    await fetchRequestsFromSupabase();
+    await fetchFriendsFromSupabase();
     document.getElementById('notifications-modal').style.display = 'none';
-    alert("✨ Друг добавлен!");
+    alert("✨ Друг успешно добавлен в список!");
 }
 
 async function declineFriend(reqId) {
@@ -1139,7 +1161,6 @@ function openUserProfileCard(userId, userName, encodedAvatar = '', encodedStatus
     const displayId = Number(userId) === Number(OWNER_ID) ? "1" : userId;
     document.getElementById('other-user-id').textContent = `#lure_${displayId} 📋`;
     
-    // Декодируем переданный статус и аватарку или берем из localStorage
     let decodedStatus = encodedStatus ? decodeURIComponent(encodedStatus) : (localStorage.getItem(`lure_status_${userId}`) || "");
     let decodedAvatar = encodedAvatar ? decodeURIComponent(encodedAvatar) : "🦇";
 
